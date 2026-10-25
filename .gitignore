@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# CDK
+cdk/cdk.out/
+cdk.out/
+*.swp
+
+# Test harness output
+report_preview.html
+
+# Local-only plaintext demo credentials - never commit
+user_creds.json
+
+# OS
+.DS_Store
+Thumbs.db

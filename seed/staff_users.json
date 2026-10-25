@@ -1,0 +1,42 @@
+[
+  {
+    "hospital_name": "Sunrise General Hospital",
+    "hospital_address": "221 Marine Drive, Mumbai, MH 400002",
+    "hospital_email": "contact@sunrisegeneral.example.com",
+    "hospital_phone": "+912266550100",
+    "username": "pnair",
+    "password": "CareRelay#2026",
+    "display_name": "Dr. Priya Nair",
+    "role": "Clinic Physician"
+  },
+  {
+    "hospital_name": "Sunrise General Hospital",
+    "hospital_address": "221 Marine Drive, Mumbai, MH 400002",
+    "hospital_email": "contact@sunrisegeneral.example.com",
+    "hospital_phone": "+912266550100",
+    "username": "jfernandes",
+    "password": "CareRelay#2026",
+    "display_name": "Jo Fernandes",
+    "role": "Billing Coordinator"
+  },
+  {
+    "hospital_name": "Sunrise General Hospital",
+    "hospital_address": "221 Marine Drive, Mumbai, MH 400002",
+    "hospital_email": "contact@sunrisegeneral.example.com",
+    "hospital_phone": "+912266550100",
+    "username": "admin",
+    "password": "CareRelay#2026",
+    "display_name": "Clinic Administrator",
+    "role": "Admin"
+  },
+  {
+    "hospital_name": "Lakeside Medical Center",
+    "hospital_address": "14 Lakeview Road, Pune, MH 411001",
+    "hospital_email": "contact@lakesidemedical.example.com",
+    "hospital_phone": "+912066550200",
+    "username": "admin",
+    "password": "CareRelay#2026",
+    "display_name": "Lakeside Clinic Administrator",
+    "role": "Admin"
+  }
+]

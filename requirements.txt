@@ -1,0 +1,12 @@
+# CDK (IaC) - 2.272.0+ required for the stable aws_bedrockagentcore (CfnRuntime) module
+aws-cdk-lib>=2.272.0
+constructs>=10.0.0,<11.0.0
+
+# Runtime / local tooling (Lambdas use the bundled boto3, these pin for local tests)
+boto3>=1.35.0
+botocore>=1.35.0
+
+# Strands multi-agent backend (agent_app/) - see agent_app/requirements.txt
+# for the versions actually baked into the AgentCore container image.
+strands-agents>=1.60.0
+bedrock-agentcore>=1.20.0

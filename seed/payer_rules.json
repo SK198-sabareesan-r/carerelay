@@ -1,0 +1,65 @@
+[
+  {
+    "payer_id": "PAYER-ACME",
+    "cpt_code": "29881",
+    "procedure_name": "Knee arthroscopy, meniscectomy",
+    "requires_prior_auth": true,
+    "required_documents": ["clinical_notes", "xray_or_mri"],
+    "rule_id": "ACME-29881-v1",
+    "notes": "Requires imaging within 90 days per ACME policy section 4.2"
+  },
+  {
+    "payer_id": "PAYER-ACME",
+    "cpt_code": "D0150",
+    "procedure_name": "Comprehensive oral evaluation",
+    "requires_prior_auth": false,
+    "required_documents": [],
+    "rule_id": "ACME-D0150-v1",
+    "notes": "Routine dental exam, no prior-auth required under ACME policy"
+  },
+  {
+    "payer_id": "PAYER-ACME",
+    "cpt_code": "D2740",
+    "procedure_name": "Crown - porcelain/ceramic",
+    "requires_prior_auth": true,
+    "required_documents": ["clinical_notes", "xray_or_mri"],
+    "rule_id": "ACME-D2740-v1",
+    "notes": "Requires pre-treatment X-ray per ACME dental policy section 7.1"
+  },
+  {
+    "payer_id": "PAYER-ACME",
+    "cpt_code": "70551",
+    "procedure_name": "MRI brain, without contrast",
+    "requires_prior_auth": true,
+    "required_documents": ["clinical_notes"],
+    "rule_id": "ACME-70551-v1",
+    "notes": "Requires referring physician's clinical notes per ACME imaging policy section 3.4"
+  },
+  {
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "cpt_code": "29881",
+    "procedure_name": "Knee arthroscopy, meniscectomy",
+    "requires_prior_auth": true,
+    "required_documents": ["clinical_notes", "xray_or_mri", "conservative_treatment_history"],
+    "rule_id": "GH-29881-v1",
+    "notes": "Requires 6 weeks documented conservative treatment per GlobalHealth policy"
+  },
+  {
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "cpt_code": "77067",
+    "procedure_name": "Screening mammography, bilateral",
+    "requires_prior_auth": false,
+    "required_documents": [],
+    "rule_id": "GH-77067-v1",
+    "notes": "Preventive screening, no prior-auth required under GlobalHealth policy"
+  },
+  {
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "cpt_code": "D2740",
+    "procedure_name": "Crown - porcelain/ceramic",
+    "requires_prior_auth": false,
+    "required_documents": [],
+    "rule_id": "GH-D2740-v1",
+    "notes": "Covered without prior-auth under GlobalHealth basic dental rider"
+  }
+]
