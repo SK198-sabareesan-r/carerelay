@@ -28,16 +28,20 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
   const [procedureName, setProcedureName] = useState("");
   const [apptDatetime, setApptDatetime] = useState("");
   const [hasInsurance, setHasInsurance] = useState(true);
-  const [payerId, setPayerId] = useState("");
   const [cptCode, setCptCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const payers = Array.from(new Set((rulesData?.rules ?? []).map((r) => r.payer_id))).sort();
-  const rulesForPayer = (rulesData?.rules ?? []).filter((r) => r.payer_id === payerId);
+  // CPT options drawn from the known payer-rule catalog, de-duplicated by
+  // CPT. Staff optionally pick the procedure's code; the PAYER itself is
+  // NOT collected here - it is read from the patient's insurance card over
+  // WhatsApp.
+  const cptOptions = Array.from(
+    new Map((rulesData?.rules ?? []).map((r) => [r.cpt_code, r])).values()
+  ).sort((a, b) => a.cpt_code.localeCompare(b.cpt_code));
 
-  function pickRule(cpt: string) {
+  function pickCpt(cpt: string) {
     setCptCode(cpt);
-    const rule = rulesForPayer.find((r) => r.cpt_code === cpt);
+    const rule = cptOptions.find((r) => r.cpt_code === cpt);
     if (rule && !procedureName) setProcedureName(rule.procedure_name);
   }
 
@@ -45,8 +49,7 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
     !!patientName.trim() &&
     phone.replace(/[^0-9]/g, "").length >= 10 &&
     !!procedureName.trim() &&
-    !!apptDatetime &&
-    (!hasInsurance || (!!payerId && !!cptCode));
+    !!apptDatetime;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,8 +61,8 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
         procedure_name: procedureName.trim(),
         appointment_datetime: formatDatetime(apptDatetime),
         has_insurance: hasInsurance,
-        cpt_code: hasInsurance ? cptCode : undefined,
-        payer_id: hasInsurance ? payerId : undefined,
+        // Payer is omitted on purpose - resolved from the card over WhatsApp.
+        cpt_code: hasInsurance && cptCode ? cptCode : undefined,
         actor: session?.username,
         hospital_id: session?.hospital_id,
         hospital_name: session?.hospital_name,
@@ -158,39 +161,31 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
           </div>
 
           {hasInsurance && (
-            <div className="grid grid-cols-2 gap-3 rounded-xl border border-ink-100 bg-ink-50/50 p-3">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-ink-500">Payer</label>
-                <select
-                  value={payerId}
-                  onChange={(e) => {
-                    setPayerId(e.target.value);
-                    setCptCode("");
-                  }}
-                  className="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
-                >
-                  <option value="">Select payer...</option>
-                  {payers.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
+            <div className="space-y-2 rounded-xl border border-ink-100 bg-ink-50/50 p-3">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wide text-ink-500">
-                  Procedure (CPT)
+                  Procedure CPT code <span className="font-normal text-ink-400">(optional)</span>
                 </label>
                 <select
                   value={cptCode}
-                  onChange={(e) => pickRule(e.target.value)}
-                  disabled={!payerId}
-                  className="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25 disabled:bg-ink-100 disabled:text-ink-400"
+                  onChange={(e) => pickCpt(e.target.value)}
+                  className="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
                 >
-                  <option value="">{payerId ? "Select..." : "Pick payer first"}</option>
-                  {rulesForPayer.map((r) => (
-                    <option key={r.cpt_code} value={r.cpt_code}>{r.cpt_code} - {r.procedure_name}</option>
+                  <option value="">Not specified - infer from procedure</option>
+                  {cptOptions.map((r) => (
+                    <option key={r.cpt_code} value={r.cpt_code}>
+                      {r.cpt_code} - {r.procedure_name}
+                    </option>
                   ))}
                 </select>
               </div>
+              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-500">
+                <svg viewBox="0 0 24 24" className="mt-0.5 h-3.5 w-3.5 flex-none text-brand-500" fill="currentColor">
+                  <path d="M20 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V6a2 2 0 00-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z" />
+                </svg>
+                The insurer, member ID, and group number are read automatically from the insurance
+                card the patient sends over WhatsApp - staff don't enter them here.
+              </p>
             </div>
           )}
 

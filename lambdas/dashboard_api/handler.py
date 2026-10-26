@@ -452,8 +452,11 @@ def _handle_start_followup(body: Dict[str, Any]):
         return _respond(400, {"error": "patient_name, patient_phone, and procedure_name are required."})
     if not appointment_datetime:
         return _respond(400, {"error": "appointment_datetime (intended slot) is required."})
-    if has_insurance and (not cpt_code or not payer_id):
-        return _respond(400, {"error": "cpt_code and payer_id are required for an insured follow-up."})
+    # NOTE: payer_id is NOT collected from staff - the payer is read from the
+    # patient's insurance card over WhatsApp (the agent maps the extracted
+    # payer_name to a payer_id). The procedure's CPT is clinical and known to
+    # the doctor, so it may optionally be supplied to pin the coverage rule;
+    # if omitted it is inferred from the procedure/voice note by the agent.
 
     phone_digits = re.sub(r"[^0-9]", "", patient_phone)
     flow = "followup_insured" if has_insurance else "followup_selfpay"

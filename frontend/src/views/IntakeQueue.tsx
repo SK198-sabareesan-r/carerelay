@@ -6,7 +6,7 @@ import { StatusBadge, OutcomeBadge, ChannelPill } from "../components/Badge";
 import { StatTile } from "../components/StatTile";
 import { DateRangePicker } from "../components/DateRangePicker";
 import { defaultDateRange } from "../lib/dateRange";
-import { AddCaseModal } from "../components/AddCaseModal";
+
 import { StartFollowupModal } from "../components/StartFollowupModal";
 import type { CaseStatus } from "../types/case";
 import type { DateRange } from "../lib/api";
@@ -44,7 +44,6 @@ export function IntakeQueue() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<StageId>("ALL");
   const [search, setSearch] = useState("");
-  const [showAddCase, setShowAddCase] = useState(false);
   const [showFollowup, setShowFollowup] = useState(false);
 
   const filtered = useMemo(() => {
@@ -75,12 +74,6 @@ export function IntakeQueue() {
           </p>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowAddCase(true)}
-            className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-white px-4 py-2.5 text-sm font-semibold text-ink-700 shadow-xs transition hover:border-brand-300 hover:text-brand-700"
-          >
-            Log a case
-          </button>
           <button
             onClick={() => setShowFollowup(true)}
             className="flex items-center gap-1.5 rounded-xl bg-gradient-to-b from-brand-600 to-brand-700 px-4 py-2.5 text-sm font-semibold text-white shadow-raised transition hover:from-brand-500 hover:to-brand-600 active:translate-y-px"
@@ -203,7 +196,7 @@ export function IntakeQueue() {
         ))}
       </div>
 
-      {showAddCase && <AddCaseModal onClose={() => setShowAddCase(false)} />}
+
       {showFollowup && <StartFollowupModal onClose={() => setShowFollowup(false)} />}
     </div>
   );

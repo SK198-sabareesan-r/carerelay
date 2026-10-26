@@ -373,7 +373,11 @@ def _run_insured_followup(sender, phone_number_id, channel, case, card_key, voic
     case_id = case["case_id"]
     cpt_code = case.get("cpt_code") or _extract_cpt_code(combined_text) or _DEFAULT_CPT_CODE
     procedure_name = case.get("procedure_name") or (combined_text.strip()[:120] or _DEFAULT_PROCEDURE_NAME)
-    payer_id = case.get("payer_id") or _DEFAULT_PAYER_ID
+    # The payer is NOT supplied by staff - it comes from the insurance card
+    # the patient sent over WhatsApp. Pass the staff-entered payer only if it
+    # exists (legacy/edge cases); otherwise PAYER-UNKNOWN tells the agent to
+    # resolve the payer from the extracted card's payer_name.
+    payer_id = case.get("payer_id") or "PAYER-UNKNOWN"
 
     payload = {
         "case_id": case_id,
