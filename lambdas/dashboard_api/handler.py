@@ -146,7 +146,11 @@ _HOSPITAL_ADDRESS_MIN_LEN = 5
 # validation) - good enough to catch typos without rejecting valid real-world
 # addresses/numbers.
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_PHONE_PATTERN = re.compile(r"^\+?[0-9][0-9\s\-()]{6,19}$")
+# Require full E.164: a leading '+' and country code, then national digits.
+# The console always submits this shape (dial-code dropdown + national
+# number); enforcing it here blocks bare national numbers from direct API
+# callers too.
+_PHONE_PATTERN = re.compile(r"^\+[1-9][0-9]{6,17}$")
 
 
 def _hospital_id(hospital_name: str) -> str:
@@ -286,7 +290,7 @@ def _handle_signup(body: Dict[str, Any]):
     if not _EMAIL_PATTERN.match(hospital_email):
         return _respond(400, {"error": "A valid hospital email address is required."})
     if not _PHONE_PATTERN.match(hospital_phone):
-        return _respond(400, {"error": "A valid hospital phone number is required."})
+        return _respond(400, {"error": "A valid hospital phone number with country code (e.g. +91...) is required."})
     if not _USERNAME_PATTERN.match(username):
         return _respond(400, {
             "error": "Username must be 3-32 characters: lowercase letters, numbers, dot, underscore, or hyphen."
@@ -450,6 +454,8 @@ def _handle_start_followup(body: Dict[str, Any]):
 
     if not patient_name or not patient_phone or not procedure_name:
         return _respond(400, {"error": "patient_name, patient_phone, and procedure_name are required."})
+    if not _PHONE_PATTERN.match(patient_phone):
+        return _respond(400, {"error": "patient_phone must include the country code (e.g. +91...)."})
     if not appointment_datetime:
         return _respond(400, {"error": "appointment_datetime (intended slot) is required."})
     # NOTE: payer_id is NOT collected from staff - the payer is read from the

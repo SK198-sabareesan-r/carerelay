@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { setSession } from "../lib/auth";
 import { BrandMark } from "../components/BrandMark";
+import { DIAL_CODES, DEFAULT_DIAL_CODE, nationalDigits as toNationalDigits, toE164 } from "../lib/phone";
 
 const ROLES = ["Clinic Physician", "Billing Coordinator", "Front Desk", "Admin"];
 
@@ -11,6 +12,7 @@ export function Signup() {
   const [hospitalName, setHospitalName] = useState("");
   const [hospitalAddress, setHospitalAddress] = useState("");
   const [hospitalEmail, setHospitalEmail] = useState("");
+  const [phoneDialCode, setPhoneDialCode] = useState(DEFAULT_DIAL_CODE);
   const [hospitalPhone, setHospitalPhone] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
@@ -19,11 +21,14 @@ export function Signup() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const phoneNationalDigits = toNationalDigits(hospitalPhone);
+  const hospitalPhoneE164 = toE164(phoneDialCode, hospitalPhone);
+
   const canSubmit =
     !!hospitalName &&
     hospitalAddress.trim().length >= 5 &&
     !!hospitalEmail &&
-    !!hospitalPhone &&
+    phoneNationalDigits.length >= 7 &&
     !!displayName &&
     !!username &&
     password.length >= 8;
@@ -40,7 +45,7 @@ export function Signup() {
         hospital_name: hospitalName.trim(),
         hospital_address: hospitalAddress.trim(),
         hospital_email: hospitalEmail.trim(),
-        hospital_phone: hospitalPhone.trim(),
+        hospital_phone: hospitalPhoneE164,
         role,
       });
       setSession(profile);
@@ -125,14 +130,28 @@ export function Signup() {
                   <label className="block text-xs font-semibold uppercase tracking-wide text-ink-500">
                     Hospital phone
                   </label>
-                  <input
-                    type="tel"
-                    value={hospitalPhone}
-                    onChange={(e) => setHospitalPhone(e.target.value)}
-                    placeholder="+91 22 6655 0100"
-                    autoComplete="tel"
-                    className="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-sm text-ink-800 outline-none placeholder:text-ink-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
-                  />
+                  <div className="mt-1.5 flex gap-1.5">
+                    <select
+                      value={phoneDialCode}
+                      onChange={(e) => setPhoneDialCode(e.target.value)}
+                      aria-label="Country code"
+                      className="w-[82px] flex-none rounded-xl border border-ink-200 bg-white px-2 py-2.5 text-sm text-ink-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
+                    >
+                      {DIAL_CODES.map((d) => (
+                        <option key={d.code} value={d.code} title={d.label}>
+                          {d.code}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="tel"
+                      value={hospitalPhone}
+                      onChange={(e) => setHospitalPhone(e.target.value)}
+                      placeholder="22 6655 0100"
+                      autoComplete="tel"
+                      className="w-full min-w-0 rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-sm text-ink-800 outline-none placeholder:text-ink-400 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
+                    />
+                  </div>
                 </div>
               </div>
               <p className="text-[11px] text-ink-400">

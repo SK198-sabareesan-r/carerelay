@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useStartFollowup, usePayerRules } from "../hooks/useCases";
 import { ApiError } from "../lib/api";
 import { getSession } from "../lib/auth";
+import { DIAL_CODES, DEFAULT_DIAL_CODE, nationalDigits as toNationalDigits, toE164 } from "../lib/phone";
 
 /**
  * The primary CareRelay workflow entry point. After an in-person consult, a
@@ -24,6 +25,7 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
   const session = getSession();
 
   const [patientName, setPatientName] = useState("");
+  const [dialCode, setDialCode] = useState(DEFAULT_DIAL_CODE);
   const [phone, setPhone] = useState("");
   const [procedureName, setProcedureName] = useState("");
   const [apptDatetime, setApptDatetime] = useState("");
@@ -45,9 +47,16 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
     if (rule && !procedureName) setProcedureName(rule.procedure_name);
   }
 
+  // Full E.164 number = selected country dial code + the national digits the
+  // staff typed (any spaces/dashes/leading-zero stripped). The country code
+  // is ALWAYS captured via the dropdown, never left to free text - WhatsApp
+  // delivery requires it.
+  const nationalDigits = toNationalDigits(phone);
+  const fullNumber = toE164(dialCode, phone);
+
   const canSubmit =
     !!patientName.trim() &&
-    phone.replace(/[^0-9]/g, "").length >= 10 &&
+    nationalDigits.length >= 7 &&
     !!procedureName.trim() &&
     !!apptDatetime;
 
@@ -57,7 +66,7 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
     try {
       await startFollowup.mutateAsync({
         patient_name: patientName.trim(),
-        patient_phone: phone.trim(),
+        patient_phone: fullNumber,
         procedure_name: procedureName.trim(),
         appointment_datetime: formatDatetime(apptDatetime),
         has_insurance: hasInsurance,
@@ -100,12 +109,32 @@ export function StartFollowupModal({ onClose }: { onClose: () => void }) {
               <label className="block text-xs font-semibold uppercase tracking-wide text-ink-500">
                 WhatsApp number
               </label>
-              <input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="+91 95007 99295"
-                className="mt-1.5 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 outline-none placeholder:text-ink-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
-              />
+              <div className="mt-1.5 flex gap-1.5">
+                <select
+                  value={dialCode}
+                  onChange={(e) => setDialCode(e.target.value)}
+                  aria-label="Country code"
+                  className="w-[86px] flex-none rounded-xl border border-ink-200 bg-white px-2 py-2 text-sm text-ink-800 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
+                >
+                  {DIAL_CODES.map((d) => (
+                    <option key={d.code} value={d.code} title={d.label}>
+                      {d.code}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  inputMode="tel"
+                  placeholder="95007 99295"
+                  className="w-full min-w-0 rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-800 outline-none placeholder:text-ink-500 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/25"
+                />
+              </div>
+              {nationalDigits.length > 0 && (
+                <p className="mt-1 text-[11px] text-ink-500">
+                  Sends to <span className="font-mono text-ink-700">{fullNumber}</span>
+                </p>
+              )}
             </div>
           </div>
 
