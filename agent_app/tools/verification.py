@@ -1,23 +1,17 @@
-"""Verification tools: the deterministic prior-auth check and the simulated
-payer IVR call.
+"""Verification tools: the deterministic prior-auth check.
 
 `check_prior_auth` is a thin, read-only wrapper around rules_engine.evaluate().
 The Verification Agent can call it as many times as it wants but cannot
 change its outcome - the tool returns exactly what the rule data says.
 
-`call_payer_ivr` is clearly a SIMULATION of an outbound call to an insurance
-payer's automated phone line, not a real telephony integration. See the
-docstring for why: building a production-grade agent that can navigate an
-arbitrary third-party IVR tree, extract a spoken approval code, and interpret
-success/failure is a multi-week integration project at a real insurer, not
-something safe to fake as "real" in a hackathon demo. We simulate it with a
-deterministic, seeded outcome so the step is honestly represented end-to-end
-without claiming a live phone call that isn't happening. See
-docs/ARCHITECTURE.md "Payer verification: simulated, not live" for the
-production path (Amazon Connect contact flow + Lex/Bedrock IVR agent) this
-would be replaced with.
+NOTE: CareRelay contacts the insurance payer ONLY by email - a formal
+written prior-authorization request sent via Amazon SES (see
+lambdas/channel_dispatcher/payer_email.py). There is no outbound IVR/phone
+call to the payer. An earlier revision included a simulated `call_payer_ivr`
+tool; it was removed in favor of the email-only payer contact path, which is
+simpler, honestly representable end-to-end, and reflects how many payers
+actually accept prior-auth submissions.
 """
-import hashlib
 from typing import Any, Dict, List, Optional
 
 from strands import tool
@@ -84,46 +78,4 @@ def _load_rules_safely() -> Optional[List[Dict[str, Any]]]:
         return None
 
 
-@tool
-def call_payer_ivr(payer_id: str, member_id: str, cpt_code: str) -> Dict[str, Any]:
-    """Call the insurance payer's IVR line to verify eligibility (SIMULATED).
 
-    THIS IS A SIMULATION, not a live telephone call. It deterministically
-    derives a plausible outcome from the inputs (same payer+member+cpt always
-    produces the same result) so the demo is reproducible and honestly
-    labeled, rather than pretending to dial a real insurer. See the module
-    docstring for the production replacement (Amazon Connect + IVR agent).
-
-    Args:
-        payer_id: insurance payer identifier.
-        member_id: the member/policy ID from the extracted insurance card.
-        cpt_code: the CPT/procedure code being verified.
-
-    Returns:
-        A dict: simulated (always True, to make the non-live nature explicit
-        to callers/logs/UI), eligible (bool), approval_code (string or null),
-        payer_hotline_note (string describing what a real IVR call would do).
-    """
-    seed = f"{payer_id}:{member_id}:{cpt_code}".encode("utf-8")
-    digest = hashlib.sha256(seed).hexdigest()
-    eligible = int(digest[:2], 16) % 10 != 0  # ~90% eligible, deterministic per input
-    approval_code = f"SIM-{digest[2:10].upper()}" if eligible else None
-
-    log_event(
-        logger,
-        "info",
-        "payer_ivr.simulated",
-        payer_id=payer_id,
-        eligible=eligible,
-    )
-    return {
-        "simulated": True,
-        "eligible": eligible,
-        "approval_code": approval_code,
-        "payer_hotline_note": (
-            "SIMULATED verification. In production this step places an "
-            "outbound call via Amazon Connect to the payer's IVR, navigates "
-            "the menu with DTMF/speech, and records the spoken approval "
-            "code to S3 for audit."
-        ),
-    }

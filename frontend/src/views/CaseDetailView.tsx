@@ -1,27 +1,36 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import clsx from "clsx";
-import { useCase } from "../hooks/useCases";
+import { useCase, useUpdateCaseStatus } from "../hooks/useCases";
 import { StatusBadge, OutcomeBadge, ChannelPill } from "../components/Badge";
 import { AgentTrace } from "../components/AgentTrace";
-import { WhatsAppPreview, RcsDoctorCardPreview, AuditEmailPreview } from "../components/ChannelPreview";
+import {
+  WhatsAppPreview,
+  RcsDoctorCardPreview,
+  AuditEmailPreview,
+  PayerEmailThread,
+} from "../components/ChannelPreview";
+import { ActivityLog } from "../components/ActivityLog";
+import { StatusUpdateControl } from "../components/StatusUpdateControl";
+import { MessageComposer } from "../components/MessageComposer";
+import type { CaseStatus } from "../types/case";
 
-type Tab = "trace" | "whatsapp" | "rcs" | "audit" | "evidence";
+type Tab = "conversations" | "payer" | "trace" | "evidence";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "trace", label: "Agent trace" },
-  { id: "whatsapp", label: "Patient (WhatsApp)" },
-  { id: "rcs", label: "Doctor (RCS)" },
-  { id: "audit", label: "Audit email" },
-  { id: "evidence", label: "Evidence" },
+  { id: "conversations", label: "Conversations" },
+  { id: "payer", label: "Payer emails" },
+  { id: "trace", label: "Processing log" },
+  { id: "evidence", label: "Timeline & evidence" },
 ];
 
 export function CaseDetailView() {
   const { caseId } = useParams<{ caseId: string }>();
   const { data, isLoading, isError, error } = useCase(caseId);
-  const [tab, setTab] = useState<Tab>("trace");
+  const updateStatus = useUpdateCaseStatus();
+  const [tab, setTab] = useState<Tab>("conversations");
 
-  if (isLoading) return <div className="px-8 py-16 text-center text-sm text-ink-400">Loading case...</div>;
+  if (isLoading) return <div className="px-8 py-16 text-center text-sm text-ink-500">Loading case...</div>;
   if (isError || !data) {
     return (
       <div className="mx-auto max-w-2xl px-8 py-16 text-center">
@@ -35,9 +44,13 @@ export function CaseDetailView() {
 
   const c = data.case;
 
+  async function handleStatusChange(status: CaseStatus, note: string) {
+    await updateStatus.mutateAsync({ caseId: c.case_id, status, note });
+  }
+
   return (
     <div className="mx-auto max-w-6xl px-8 py-8">
-      <Link to="/queue" className="inline-flex items-center gap-1.5 text-sm text-ink-500 hover:text-ink-800">
+      <Link to="/queue" className="inline-flex items-center gap-1.5 text-sm text-ink-600 hover:text-ink-800">
         <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
           <path d="M15 6l-6 6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
@@ -49,18 +62,51 @@ export function CaseDetailView() {
           <div className="flex items-center gap-2.5">
             <h1 className="font-serif text-[28px] font-semibold tracking-tight text-ink-900">{c.patient_name}</h1>
             <ChannelPill channel={c.channel} />
+            {c.hospital_name && (
+              <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-[11px] font-semibold text-brand-700 ring-1 ring-inset ring-brand-200">
+                {c.hospital_name}
+              </span>
+            )}
           </div>
-          <p className="mt-1 text-sm text-ink-500">
-            {c.procedure_name} <span className="text-ink-300">&middot;</span> CPT{" "}
-            <span className="font-mono">{c.cpt_code}</span> <span className="text-ink-300">&middot;</span>{" "}
-            {c.payer_id} <span className="text-ink-300">&middot;</span> {c.patient_phone_masked}
+          <p className="mt-1 text-sm text-ink-600">
+            {c.procedure_name} <span className="text-ink-400">&middot;</span> CPT{" "}
+            <span className="font-mono">{c.cpt_code}</span> <span className="text-ink-400">&middot;</span>{" "}
+            {c.payer_id} <span className="text-ink-400">&middot;</span> {c.patient_phone_masked}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <OutcomeBadge outcome={c.verification.outcome} />
-          <StatusBadge status={c.status} />
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-2">
+            <OutcomeBadge outcome={c.verification.outcome} />
+            <StatusBadge status={c.status} />
+          </div>
+          <StatusUpdateControl
+            currentStatus={c.status}
+            onChange={handleStatusChange}
+            isSaving={updateStatus.isPending}
+          />
         </div>
       </header>
+
+      {c.flow && c.appointment_datetime && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-2xl border border-brand-100 bg-brand-50/60 px-4 py-3 text-sm">
+          <span className="font-semibold text-brand-800">
+            {c.has_insurance ? "Insured follow-up" : "Self-pay follow-up"}
+          </span>
+          <span className="text-ink-600">
+            Appointment: <strong className="text-ink-900">{c.appointment_datetime}</strong>
+          </span>
+          <span
+            className={
+              "rounded-full px-2.5 py-0.5 text-[11px] font-semibold " +
+              (c.appointment_released
+                ? "bg-brand-100 text-brand-800"
+                : "bg-amber-100 text-amber-800")
+            }
+          >
+            {c.appointment_released ? "Released to patient" : "Withheld until cleared"}
+          </span>
+        </div>
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-[1.3fr_1fr]">
         <div>
@@ -73,7 +119,7 @@ export function CaseDetailView() {
                   "flex-none rounded-xl px-3.5 py-2 text-xs font-semibold transition-all",
                   tab === t.id
                     ? "bg-gradient-to-b from-brand-600 to-brand-700 text-white shadow-raised"
-                    : "text-ink-500 hover:bg-white/70 hover:text-ink-800"
+                    : "text-ink-600 hover:bg-white/70 hover:text-ink-800"
                 )}
               >
                 {t.label}
@@ -82,11 +128,45 @@ export function CaseDetailView() {
           </div>
 
           <div className="surface-3d mt-4 rounded-2xl p-5">
+            {tab === "conversations" && (
+              <div className="space-y-6">
+                <WhatsAppPreview
+                  messages={c.messages}
+                  transcript={c.transcript}
+                  patientName={c.patient_name}
+                />
+                <MessageComposer caseId={c.case_id} canMessage={c.can_message_patient} />
+                {c.messages.doctor_card_body && (
+                  <div>
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
+                      Doctor approval card
+                    </h4>
+                    <RcsDoctorCardPreview messages={c.messages} />
+                  </div>
+                )}
+              </div>
+            )}
+            {tab === "payer" && <PayerEmailThread emails={c.payer_emails} />}
             {tab === "trace" && <AgentTrace steps={c.agent_trace} />}
-            {tab === "whatsapp" && <WhatsAppPreview messages={c.messages} />}
-            {tab === "rcs" && <RcsDoctorCardPreview messages={c.messages} />}
-            {tab === "audit" && <AuditEmailPreview messages={c.messages} />}
-            {tab === "evidence" && <EvidencePanel photoUrl={c.photo_url} audioUrl={c.audio_url} facts={c.perceived_facts} />}
+            {tab === "evidence" && (
+              <div className="space-y-6">
+                <EvidencePanel photoUrl={c.photo_url} audioUrl={c.audio_url} facts={c.perceived_facts} />
+                <div>
+                  <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
+                    Case timeline
+                  </h4>
+                  <ActivityLog entries={c.activity_log} />
+                </div>
+                {c.messages.audit_headline && (
+                  <div>
+                    <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
+                      Audit email
+                    </h4>
+                    <AuditEmailPreview messages={c.messages} />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -97,10 +177,10 @@ export function CaseDetailView() {
             missingDocs={c.verification.missing_documents}
           />
           <ExtractedCardPanel card={c.extracted_card} />
-          {c.verification.payer_simulated && (
-            <PayerSimulationCard
-              eligible={c.verification.payer_eligible}
+          {c.verification.outcome === "PRIOR_AUTH_REQUIRED" && (
+            <PayerContactCard
               approvalCode={c.verification.approval_code}
+              eligible={c.verification.payer_eligible}
             />
           )}
         </div>
@@ -174,28 +254,30 @@ function ExtractedCardPanel({ card }: { card: { payer_name?: string | null; memb
   );
 }
 
-function PayerSimulationCard({ eligible, approvalCode }: { eligible?: boolean | null; approvalCode?: string | null }) {
+function PayerContactCard({ eligible, approvalCode }: { eligible?: boolean | null; approvalCode?: string | null }) {
   return (
     <div className="surface-3d rounded-2xl p-4">
       <div className="flex items-center gap-2">
-        <h3 className="text-sm font-semibold text-ink-800">Payer IVR verification</h3>
+        <h3 className="text-sm font-semibold text-ink-800">Payer contact</h3>
         <span className="pill-3d rounded-md bg-gradient-to-b from-white to-ink-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-600">
-          Simulated
+          Amazon SES
         </span>
       </div>
-      <p className="mt-2 text-[13px] leading-relaxed text-ink-500">
-        Stands in for an outbound Amazon Connect call to the payer's IVR line. Deterministic per
-        case for a reproducible demo - see docs/ARCHITECTURE.md.
+      <p className="mt-2 text-[13px] leading-relaxed text-ink-600">
+        CareRelay contacts the insurance payer by email only - a formal written prior-authorization
+        request sent to the payer's intake inbox via Amazon SES. No IVR or phone call is placed.
       </p>
-      <div className="mt-3 flex items-center justify-between rounded-lg bg-ink-50 px-3 py-2">
-        <span className="text-xs text-ink-500">Eligible</span>
-        <span className={clsx("text-sm font-semibold", eligible ? "text-brand-700" : "text-rose-700")}>
-          {eligible ? "Yes" : "No"}
-        </span>
-      </div>
+      {eligible != null && (
+        <div className="mt-3 flex items-center justify-between rounded-lg bg-ink-50 px-3 py-2">
+          <span className="text-xs text-ink-600">Payer response</span>
+          <span className={clsx("text-sm font-semibold", eligible ? "text-brand-700" : "text-rose-700")}>
+            {eligible ? "Eligible" : "Pending / not eligible"}
+          </span>
+        </div>
+      )}
       {approvalCode && (
         <div className="mt-2 flex items-center justify-between rounded-lg bg-ink-50 px-3 py-2">
-          <span className="text-xs text-ink-500">Approval code</span>
+          <span className="text-xs text-ink-600">Approval code</span>
           <span className="font-mono text-sm text-ink-800">{approvalCode}</span>
         </div>
       )}
@@ -228,10 +310,10 @@ function EvidencePanel({
       )}
       <div>
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
-          Perceived facts (Intake agent)
+          Captured details
         </h4>
         {facts.length === 0 ? (
-          <p className="text-sm text-ink-400">No additional facts captured for this case.</p>
+          <p className="text-sm text-ink-500">No additional facts captured for this case.</p>
         ) : (
           <ul className="space-y-1.5">
             {facts.map((f, i) => (

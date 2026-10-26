@@ -10,7 +10,7 @@ A patient sends a photo of their insurance card and a voice note describing thei
 
 ## Why this fits AWS CDS
 
-- **WhatsApp (AWS End User Messaging Social)** — patient intake (photo + voice note) and status replies with interactive buttons.
+- **WhatsApp (AWS End User Messaging Social)** — patient intake (photo + voice note) and status replies with interactive buttons. Meta owns the WhatsApp network itself (the WhatsApp Business Account); AWS End User Messaging Social is the bridge service that relays those messages into AWS. Per [AWS's own architecture](https://docs.aws.amazon.com/social-messaging/latest/userguide/managing-event-destinations.html), inbound events are delivered through an **Amazon SNS** topic as the required "event destination" — `CareRelay-InboundTopic` fans out to the `webhook_receiver` Lambda. SNS has no WhatsApp-specific logic; it's plain AWS plumbing sitting between the Meta-facing service and our Lambda code.
 - **RCS, falling back to SMS (AWS End User Messaging)** — doctor/clinic approval cards.
 - **Amazon SES** — KMS-signed audit report emails to billing/ops staff, and a staff-onboarding email when a hospital registers.
 - **Amazon Bedrock AgentCore Runtime** — hosts the Strands multi-agent backend as a container-based agent runtime, invoked per case by the `channel_dispatcher` Lambda.
@@ -92,7 +92,7 @@ Email (SES) is **never** sent to patients or payers — it's used only for the t
 
 ## Quick start
 
-Prerequisites: Python 3.11+, Node.js 18+, AWS CLI configured, AWS CDK v2 (`npm i -g aws-cdk`), Docker (for the AgentCore Runtime container build).
+Prerequisites: Python 3.11+, Node.js 18+, AWS CLI configured.
 
 ```bash
 # 1. Install backend deps
@@ -104,37 +104,59 @@ cp .env.example .env     # fill in AWS creds, Bedrock model id, WhatsApp/RCS/SMS
 
 # 3. Frontend
 cd frontend && npm install && npm run build
-
-# 4. Deploy (full stack - see cdk/ for StorageStack/MessagingStack/ComputeStack)
-cd cdk
-cdk bootstrap
-cdk deploy --all
 ```
 
-### Testing locally before deploying (no `cdk deploy` needed)
+### Current deployment status (direct-to-AWS, no `cdk deploy` yet)
 
-This project deliberately defers the full CDK deploy until everything else is verified against real AWS, to control cost. The `scripts/` directory has standalone utilities that exercise the real AWS services directly:
+**`cdk deploy` is deliberately deferred** (the AgentCore Runtime container build is the one genuinely costed piece). Everything else has already been stood up directly via boto3 scripts in `scripts/`, so the console and the inbound-message plumbing are real and running against AWS today - not mocked.
+
+Run these once, in order, to reproduce the current live environment (each is idempotent - safe to re-run):
 
 ```bash
-# Create just the staff-auth DynamoDB table + verify the SES sender identity
-python scripts/setup_auth_infra.py
+# --- Staff console backend ---
+python scripts/setup_auth_infra.py          # StaffUsersTable + verify SES sender identity
+python scripts/setup_case_infra.py          # PriorAuthTable + PayerRulesTable
+python scripts/seed_payer_rules.py          # seed/payer_rules.json -> PayerRulesTable
+python scripts/seed_prior_auth_cases.py     # seed/prior_auth_cases.json -> PriorAuthTable (demo cases)
+python scripts/seed_staff_users.py          # seed/staff_users.json -> StaffUsersTable (demo logins)
+python scripts/deploy_dashboard_api.py      # Lambda: CareRelay-DashboardApi
+python scripts/deploy_api_gateway.py        # API Gateway REST API in front of it (prints the base URL)
 
-# Check SES identity verification / sandbox status
-python scripts/check_ses_identity.py
+# --- Inbound WhatsApp intake pipeline ---
+python scripts/setup_intake_infra.py        # IntakeEventsTable (streamed) + PatientsTable
+python scripts/setup_sns_topic.py           # CareRelay-InboundTopic SNS topic
+python scripts/deploy_webhook_receiver.py   # Lambda: CareRelay-WebhookReceiver
+python scripts/deploy_channel_dispatcher.py # Lambda: CareRelay-ChannelDispatcher + DynamoDB Stream trigger
+python scripts/subscribe_webhook_to_sns.py  # subscribes WebhookReceiver to the SNS topic
+```
 
-# Seed demo staff accounts (see user_creds.json, gitignored, for the plaintext demo logins)
-python scripts/seed_staff_users.py
+After this, the frontend's live API base (`frontend/src/lib/api.ts:LIVE_API_BASE_DEFAULT`) points at the deployed API Gateway URL automatically - no manual config needed to demo the console.
 
-# Run the full agent pipeline against a sample case, no deploy required
+**What is proven working right now** (verified with real AWS calls, not just code review):
+- Console: signup/login, case list/detail/create, status updates with a timestamped activity log, payer rule authoring - all backed by real DynamoDB, over a real API Gateway endpoint.
+- Inbound pipeline: a simulated WhatsApp-shaped message published to the SNS topic is correctly received by `webhook_receiver`, written to `IntakeEventsTable`, and triggers `channel_dispatcher` via the DynamoDB Stream - confirmed via CloudWatch Logs showing the full chain executing.
+
+**What is NOT yet live** (the two pieces genuinely gated on cost/manual setup):
+1. **Amazon Bedrock AgentCore Runtime** (the Strands agent container) - not deployed, since this is the `cdk deploy` step being deferred. `channel_dispatcher` already handles this gracefully: with `AGENT_RUNTIME_ARN` unset, it logs `agent.invoke.skipped.no_runtime_arn` and exits cleanly instead of erroring. Deploy with `cdk deploy --all` (see `cdk/stacks/compute_stack.py`) when ready, then set `AGENT_RUNTIME_ARN` in `.env` and re-run `scripts/deploy_channel_dispatcher.py`.
+2. **A real WhatsApp Business Account (WABA) linked via AWS End User Messaging Social.** This is a manual, console-driven step that cannot be scripted - it requires a Meta Business account, phone number verification, and an AWS-side linking flow. Until this is done, the SNS topic has no real inbound traffic (only the simulated test message used for verification above). To complete it:
+   - In the AWS console, go to **AWS End User Messaging Social** → link/onboard a WhatsApp Business Account.
+   - Under that WABA's settings, add a **message and event destination** pointing at the SNS topic ARN printed by `scripts/setup_sns_topic.py` (`arn:aws:sns:<region>:<account>:CareRelay-InboundTopic`).
+   - See AWS's own guide: ["Add a message and event destination to AWS End User Messaging Social"](https://docs.aws.amazon.com/social-messaging/latest/userguide/managing-event-destinations-add.html).
+
+### Local pipeline test (no AWS deploy needed at all)
+
+```bash
 python scripts/local_pipeline_test.py
 ```
+
+Runs the full agent pipeline (Strands supervisor + rules engine) against a sample case entirely locally.
 
 ---
 
 ## Security notes
 
 - Staff passwords are hashed with PBKDF2-HMAC-SHA256 (260,000 iterations), never stored in plaintext.
-- The dashboard API is unauthenticated-by-default for demo convenience on the read-only `/cases`, `/stats`, `/payer-rules` routes — see the security note in `lambdas/dashboard_api/handler.py`. Add a Cognito/Lambda authorizer before any real deployment.
+- The dashboard API is unauthenticated-by-default for demo convenience, including the staff-initiated write routes (`POST /cases`, `PATCH /cases/{id}/status`, `POST /payer-rules`) — see the security note in `lambdas/dashboard_api/handler.py`. Add a Cognito/Lambda authorizer before any real deployment; until then, the `actor` field on activity log entries is self-reported by the client, not a verified identity.
 - `patient_phone_masked` is pre-masked at write time; the dashboard API never returns a raw phone number.
 - Audit report emails are signed with an asymmetric KMS key (RSASSA_PKCS1_V1_5_SHA_256) so recipients can verify the report wasn't altered.
 - Multi-tenancy is currently scoped to staff auth only (signup/login are hospital-scoped via a composite `(hospital_id, username)` key). Case data is not yet filtered per hospital — documented explicitly in code comments rather than left as an unstated gap.

@@ -4,7 +4,16 @@
  * sync when either side changes.
  */
 
-export type CaseStatus = "OPEN" | "APPROVED" | "DENIED" | "AWAITING_DOCUMENTS";
+export type CaseStatus =
+  | "OPEN"
+  | "APPROVED"
+  | "DENIED"
+  | "AWAITING_DOCUMENTS"
+  // Follow-up flow lifecycle states.
+  | "AWAITING_INSURANCE_DOCS"
+  | "AWAITING_VOICE_NOTE"
+  | "PENDING_DOCTOR_APPROVAL"
+  | "SCHEDULED";
 
 export type PriorAuthOutcome =
   | "PRIOR_AUTH_REQUIRED"
@@ -48,11 +57,48 @@ export interface AgentTraceStep {
   detail: string[];
 }
 
+export interface ActivityLogEntry {
+  timestamp: string;
+  event: string;
+  actor: string;
+  detail: string;
+}
+
+export type TranscriptDirection = "inbound" | "outbound";
+export type TranscriptKind = "text" | "image" | "audio" | "button" | "interactive";
+
+export interface TranscriptMessage {
+  direction: TranscriptDirection;
+  kind: TranscriptKind;
+  body: string;
+  actor: string;
+  timestamp: string;
+}
+
+/** One email in the hospital <-> payer prior-authorization correspondence. */
+export interface PayerEmail {
+  direction: "inbound" | "outbound"; // outbound = clinic->payer, inbound = payer->clinic
+  subject: string;
+  from_addr: string;
+  to_addr: string;
+  from_label: string;
+  to_label: string;
+  body: string;
+  message_id?: string | null;
+  timestamp: string;
+}
+
 export interface CaseSummary {
   case_id: string;
   created_at: string;
   status: CaseStatus;
   channel: Channel;
+  flow?: string | null;
+  has_insurance?: boolean | null;
+  appointment_datetime?: string | null;
+  appointment_released?: boolean | null;
+  hospital_id?: string | null;
+  hospital_name?: string | null;
   patient_name: string;
   patient_phone_masked: string;
   cpt_code: string;
@@ -69,6 +115,10 @@ export interface CaseDetail extends CaseSummary {
   photo_url?: string | null;
   audio_url?: string | null;
   agent_trace: AgentTraceStep[];
+  activity_log: ActivityLogEntry[];
+  transcript?: TranscriptMessage[];
+  payer_emails?: PayerEmail[];
+  can_message_patient: boolean;
 }
 
 export interface PayerRule {

@@ -1,0 +1,408 @@
+[
+  {
+    "case_id": "case-7f3a1c",
+    "days_ago": 0,
+    "minutes_ago": 6,
+    "status": "APPROVED",
+    "channel": "whatsapp",
+    "patient_name": "R. Sharma",
+    "patient_phone_masked": "***4821",
+    "cpt_code": "29881",
+    "procedure_name": "Knee arthroscopy, meniscectomy",
+    "payer_id": "PAYER-ACME",
+    "extracted_card": {
+      "payer_name": "ACME Health",
+      "member_id": "W847162930",
+      "group_number": "GRP-2291",
+      "payer_id": "PAYER-ACME",
+      "confidence": 96.4
+    },
+    "verification": {
+      "outcome": "PRIOR_AUTH_REQUIRED",
+      "requires_prior_auth": true,
+      "missing_documents": [],
+      "matched_rule_id": "ACME-29881-v1",
+      "rationale": "Rule ACME-29881-v1: Requires imaging within 90 days per ACME policy section 4.2",
+      "payer_simulated": true,
+      "payer_eligible": true,
+      "approval_code": "SIM-F83020BD"
+    },
+    "perceived_facts": ["Symptom summary: Patient reports persistent knee pain and swelling after a fall two weeks ago."],
+    "messages": {
+      "patient_message_body": "Good news - your insurance coverage for the knee procedure has been verified (approval code SIM-F83020BD). Your doctor's office has been notified to confirm your appointment slot.",
+      "patient_message_buttons": [{"id": "ack", "title": "Thank you"}],
+      "doctor_card_body": "Patient: R. Sharma\nProcedure: Knee arthroscopy, meniscectomy (29881)\nPrior authorization verified with payer.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Prior auth required for R. Sharma",
+      "audit_detail_lines": [
+        "Case ID: case-7f3a1c",
+        "Payer: PAYER-ACME  |  CPT: 29881",
+        "Outcome: PRIOR_AUTH_REQUIRED",
+        "Rule rationale: Rule ACME-29881-v1: Requires imaging within 90 days per ACME policy section 4.2",
+        "Payer approval code: SIM-F83020BD"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo + voice note received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 96.4%) and transcribed voice note."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule ACME-29881-v1, prior auth required."},
+      {"offset_minutes": 3, "event": "PAYER_CHECK", "actor": "agent", "detail": "Simulated payer IVR call returned eligible=true, approval_code=SIM-F83020BD."},
+      {"offset_minutes": 4, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> APPROVED"},
+      {"offset_minutes": 4, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp reply sent, doctor RCS approval card sent, audit email dispatched."}
+    ]
+  },
+  {
+    "case_id": "case-9b2e44",
+    "days_ago": 0,
+    "minutes_ago": 21,
+    "status": "AWAITING_DOCUMENTS",
+    "channel": "whatsapp",
+    "patient_name": "A. Fernandes",
+    "patient_phone_masked": "***0157",
+    "cpt_code": "D2740",
+    "procedure_name": "Crown - porcelain/ceramic",
+    "payer_id": "PAYER-ACME",
+    "extracted_card": {
+      "payer_name": "ACME Health",
+      "member_id": "W119283746",
+      "group_number": "GRP-0042",
+      "payer_id": "PAYER-ACME",
+      "confidence": 89.1
+    },
+    "verification": {
+      "outcome": "INCOMPLETE_INFO",
+      "requires_prior_auth": true,
+      "missing_documents": ["clinical_notes", "xray_or_mri"],
+      "matched_rule_id": "ACME-D2740-v1",
+      "rationale": "Rule ACME-D2740-v1: Requires pre-treatment X-ray per ACME dental policy section 7.1",
+      "payer_simulated": false,
+      "payer_eligible": null,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Patient needs a crown replacement following a cracked molar."],
+    "messages": {
+      "patient_message_body": "We're processing your prior authorization. We still need: clinical notes, x ray or mri. Please reply with a photo or PDF of each.",
+      "patient_message_buttons": [{"id": "upload_docs", "title": "Upload now"}],
+      "doctor_card_body": "Patient: A. Fernandes\nProcedure: Crown - porcelain/ceramic (D2740)\nMissing documents: clinical_notes, xray_or_mri.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Incomplete info for A. Fernandes",
+      "audit_detail_lines": [
+        "Case ID: case-9b2e44",
+        "Payer: PAYER-ACME  |  CPT: D2740",
+        "Outcome: INCOMPLETE_INFO",
+        "Rule rationale: Rule ACME-D2740-v1: Requires pre-treatment X-ray per ACME dental policy section 7.1"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 89.1%)."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule ACME-D2740-v1, missing clinical_notes and xray_or_mri."},
+      {"offset_minutes": 2, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> AWAITING_DOCUMENTS"},
+      {"offset_minutes": 3, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp document request sent, doctor RCS card sent."}
+    ]
+  },
+  {
+    "case_id": "case-1a77de",
+    "days_ago": 1,
+    "minutes_ago": 42,
+    "status": "APPROVED",
+    "channel": "whatsapp",
+    "patient_name": "K. Iyer",
+    "patient_phone_masked": "***3390",
+    "cpt_code": "D0150",
+    "procedure_name": "Comprehensive oral evaluation",
+    "payer_id": "PAYER-ACME",
+    "extracted_card": {
+      "payer_name": "ACME Health",
+      "member_id": "W558213099",
+      "group_number": "GRP-2291",
+      "payer_id": "PAYER-ACME",
+      "confidence": 94.8
+    },
+    "verification": {
+      "outcome": "NOT_REQUIRED",
+      "requires_prior_auth": false,
+      "missing_documents": [],
+      "matched_rule_id": "ACME-D0150-v1",
+      "rationale": "Rule ACME-D0150-v1: Routine dental exam, no prior-auth required under ACME policy",
+      "payer_simulated": false,
+      "payer_eligible": null,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Routine six-month dental check-up, no acute symptoms reported."],
+    "messages": {
+      "patient_message_body": "Good news - your upcoming procedure does not require prior authorization. Your appointment is confirmed.",
+      "patient_message_buttons": [{"id": "ack", "title": "Got it"}],
+      "doctor_card_body": "Patient: K. Iyer\nProcedure: Comprehensive oral evaluation (D0150)\nNo prior authorization required.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "No prior auth needed for K. Iyer",
+      "audit_detail_lines": [
+        "Case ID: case-1a77de",
+        "Payer: PAYER-ACME  |  CPT: D0150",
+        "Outcome: NOT_REQUIRED",
+        "Rule rationale: Rule ACME-D0150-v1: Routine dental exam, no prior-auth required under ACME policy"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 94.8%)."},
+      {"offset_minutes": 1, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule ACME-D0150-v1, no prior auth required."},
+      {"offset_minutes": 2, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> APPROVED"},
+      {"offset_minutes": 2, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp confirmation sent, doctor RCS card sent."}
+    ]
+  },
+  {
+    "case_id": "case-c40f12",
+    "days_ago": 1,
+    "minutes_ago": 190,
+    "status": "DENIED",
+    "channel": "rcs",
+    "patient_name": "M. Desai",
+    "patient_phone_masked": "***7742",
+    "cpt_code": "29881",
+    "procedure_name": "Knee arthroscopy, meniscectomy",
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "extracted_card": {
+      "payer_name": "GlobalHealth",
+      "member_id": "GH-220194",
+      "group_number": "GRP-9910",
+      "payer_id": "PAYER-GLOBALHEALTH",
+      "confidence": 91.0
+    },
+    "verification": {
+      "outcome": "PRIOR_AUTH_REQUIRED",
+      "requires_prior_auth": true,
+      "missing_documents": [],
+      "matched_rule_id": "GH-29881-v1",
+      "rationale": "Rule GH-29881-v1: Requires 6 weeks documented conservative treatment per GlobalHealth policy",
+      "payer_simulated": true,
+      "payer_eligible": false,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Chronic knee instability, patient requesting surgical evaluation."],
+    "messages": {
+      "patient_message_body": "We're still verifying your insurance coverage for this procedure. We'll message you as soon as it's confirmed.",
+      "patient_message_buttons": [{"id": "ack", "title": "Got it"}],
+      "doctor_card_body": "Patient: M. Desai\nProcedure: Knee arthroscopy, meniscectomy (29881)\nPrior authorization verified with payer.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Payer declined eligibility for M. Desai",
+      "audit_detail_lines": [
+        "Case ID: case-c40f12",
+        "Payer: PAYER-GLOBALHEALTH  |  CPT: 29881",
+        "Outcome: PRIOR_AUTH_REQUIRED",
+        "Rule rationale: Rule GH-29881-v1: Requires 6 weeks documented conservative treatment per GlobalHealth policy"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound RCS intake received."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 91.0%)."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule GH-29881-v1, prior auth required."},
+      {"offset_minutes": 3, "event": "PAYER_CHECK", "actor": "agent", "detail": "Simulated payer IVR call returned eligible=false - no documented conservative treatment on file."},
+      {"offset_minutes": 4, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> DENIED"},
+      {"offset_minutes": 4, "event": "NOTIFIED", "actor": "system", "detail": "Patient notified coverage is still being verified, audit email dispatched."}
+    ]
+  },
+  {
+    "case_id": "case-3e88a0",
+    "days_ago": 2,
+    "minutes_ago": 95,
+    "status": "OPEN",
+    "channel": "whatsapp",
+    "patient_name": "S. Nair",
+    "patient_phone_masked": "***5521",
+    "cpt_code": "77067",
+    "procedure_name": "Screening mammography, bilateral",
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "extracted_card": {
+      "payer_name": "GlobalHealth",
+      "member_id": "GH-837201",
+      "group_number": "GRP-4471",
+      "payer_id": "PAYER-GLOBALHEALTH",
+      "confidence": 97.2
+    },
+    "verification": {
+      "outcome": "NOT_REQUIRED",
+      "requires_prior_auth": false,
+      "missing_documents": [],
+      "matched_rule_id": "GH-77067-v1",
+      "rationale": "Rule GH-77067-v1: Preventive screening, no prior-auth required under GlobalHealth policy",
+      "payer_simulated": false,
+      "payer_eligible": null,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Annual preventive screening, no symptoms reported."],
+    "messages": {
+      "patient_message_body": "Good news - your upcoming procedure does not require prior authorization. Your appointment is confirmed.",
+      "patient_message_buttons": [{"id": "ack", "title": "Got it"}],
+      "doctor_card_body": "Patient: S. Nair\nProcedure: Screening mammography, bilateral (77067)\nNo prior authorization required.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "No prior auth needed for S. Nair",
+      "audit_detail_lines": [
+        "Case ID: case-3e88a0",
+        "Payer: PAYER-GLOBALHEALTH  |  CPT: 77067",
+        "Outcome: NOT_REQUIRED",
+        "Rule rationale: Rule GH-77067-v1: Preventive screening, no prior-auth required under GlobalHealth policy"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 97.2%)."},
+      {"offset_minutes": 1, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule GH-77067-v1, no prior auth required."},
+      {"offset_minutes": 2, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp confirmation sent, doctor RCS card sent. Awaiting front-desk slot confirmation."}
+    ]
+  },
+  {
+    "case_id": "case-5d19ff",
+    "days_ago": 3,
+    "minutes_ago": 300,
+    "status": "APPROVED",
+    "channel": "whatsapp",
+    "patient_name": "V. Krishnan",
+    "patient_phone_masked": "***6610",
+    "cpt_code": "70551",
+    "procedure_name": "MRI brain, without contrast",
+    "payer_id": "PAYER-ACME",
+    "extracted_card": {
+      "payer_name": "ACME Health",
+      "member_id": "W992817364",
+      "group_number": "GRP-2291",
+      "payer_id": "PAYER-ACME",
+      "confidence": 93.5
+    },
+    "verification": {
+      "outcome": "PRIOR_AUTH_REQUIRED",
+      "requires_prior_auth": true,
+      "missing_documents": [],
+      "matched_rule_id": "ACME-70551-v1",
+      "rationale": "Rule ACME-70551-v1: Requires referring physician's clinical notes per ACME imaging policy section 3.4",
+      "payer_simulated": true,
+      "payer_eligible": true,
+      "approval_code": "SIM-A91B2C3D"
+    },
+    "perceived_facts": ["Symptom summary: Recurring migraines over the past month, referred for imaging by neurologist."],
+    "messages": {
+      "patient_message_body": "Good news - your insurance coverage for the MRI has been verified (approval code SIM-A91B2C3D). Your doctor's office has been notified to confirm your appointment slot.",
+      "patient_message_buttons": [{"id": "ack", "title": "Thank you"}],
+      "doctor_card_body": "Patient: V. Krishnan\nProcedure: MRI brain, without contrast (70551)\nPrior authorization verified with payer.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Prior auth required for V. Krishnan",
+      "audit_detail_lines": [
+        "Case ID: case-5d19ff",
+        "Payer: PAYER-ACME  |  CPT: 70551",
+        "Outcome: PRIOR_AUTH_REQUIRED",
+        "Rule rationale: Rule ACME-70551-v1: Requires referring physician's clinical notes per ACME imaging policy section 3.4",
+        "Payer approval code: SIM-A91B2C3D"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo + voice note received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 93.5%) and transcribed voice note."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule ACME-70551-v1, prior auth required."},
+      {"offset_minutes": 3, "event": "PAYER_CHECK", "actor": "agent", "detail": "Simulated payer IVR call returned eligible=true, approval_code=SIM-A91B2C3D."},
+      {"offset_minutes": 4, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> APPROVED"},
+      {"offset_minutes": 4, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp reply sent, doctor RCS approval card sent, audit email dispatched."}
+    ]
+  },
+  {
+    "case_id": "case-e02b88",
+    "days_ago": 5,
+    "minutes_ago": 150,
+    "status": "AWAITING_DOCUMENTS",
+    "channel": "whatsapp",
+    "patient_name": "T. Menon",
+    "patient_phone_masked": "***2208",
+    "cpt_code": "29881",
+    "procedure_name": "Knee arthroscopy, meniscectomy",
+    "payer_id": "PAYER-GLOBALHEALTH",
+    "extracted_card": {
+      "payer_name": "GlobalHealth",
+      "member_id": "GH-114477",
+      "group_number": "GRP-4471",
+      "payer_id": "PAYER-GLOBALHEALTH",
+      "confidence": 88.3
+    },
+    "verification": {
+      "outcome": "INCOMPLETE_INFO",
+      "requires_prior_auth": true,
+      "missing_documents": ["clinical_notes", "xray_or_mri", "conservative_treatment_history"],
+      "matched_rule_id": "GH-29881-v1",
+      "rationale": "Rule GH-29881-v1: Requires 6 weeks documented conservative treatment per GlobalHealth policy",
+      "payer_simulated": false,
+      "payer_eligible": null,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Knee pain following a sports injury, patient requesting evaluation."],
+    "messages": {
+      "patient_message_body": "We're processing your prior authorization. We still need: clinical notes, x ray or mri, conservative treatment history. Please reply with a photo or PDF of each.",
+      "patient_message_buttons": [{"id": "upload_docs", "title": "Upload now"}],
+      "doctor_card_body": "Patient: T. Menon\nProcedure: Knee arthroscopy, meniscectomy (29881)\nMissing documents: clinical_notes, xray_or_mri, conservative_treatment_history.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Incomplete info for T. Menon",
+      "audit_detail_lines": [
+        "Case ID: case-e02b88",
+        "Payer: PAYER-GLOBALHEALTH  |  CPT: 29881",
+        "Outcome: INCOMPLETE_INFO",
+        "Rule rationale: Rule GH-29881-v1: Requires 6 weeks documented conservative treatment per GlobalHealth policy"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound WhatsApp card photo received, intake batch opened."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 88.3%)."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule GH-29881-v1, missing 3 documents."},
+      {"offset_minutes": 2, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> AWAITING_DOCUMENTS"},
+      {"offset_minutes": 3, "event": "NOTIFIED", "actor": "system", "detail": "Patient WhatsApp document request sent, doctor RCS card sent."}
+    ]
+  },
+  {
+    "case_id": "case-b7719a",
+    "days_ago": 6,
+    "minutes_ago": 420,
+    "status": "DENIED",
+    "channel": "sms",
+    "patient_name": "P. Rao",
+    "patient_phone_masked": "***9034",
+    "cpt_code": "D2740",
+    "procedure_name": "Crown - porcelain/ceramic",
+    "payer_id": "PAYER-ACME",
+    "extracted_card": {
+      "payer_name": "ACME Health",
+      "member_id": "W220938475",
+      "group_number": "GRP-0042",
+      "payer_id": "PAYER-ACME",
+      "confidence": 90.6
+    },
+    "verification": {
+      "outcome": "PRIOR_AUTH_REQUIRED",
+      "requires_prior_auth": true,
+      "missing_documents": [],
+      "matched_rule_id": "ACME-D2740-v1",
+      "rationale": "Rule ACME-D2740-v1: Requires pre-treatment X-ray per ACME dental policy section 7.1",
+      "payer_simulated": true,
+      "payer_eligible": false,
+      "approval_code": null
+    },
+    "perceived_facts": ["Symptom summary: Crown replacement requested, X-ray submitted did not meet payer imaging window requirement."],
+    "messages": {
+      "patient_message_body": "Unfortunately your insurance has not approved this procedure at this time. Our billing team will follow up with next steps.",
+      "patient_message_buttons": [{"id": "ack", "title": "Got it"}],
+      "doctor_card_body": "Patient: P. Rao\nProcedure: Crown - porcelain/ceramic (D2740)\nPayer declined eligibility.",
+      "doctor_card_buttons": [{"id": "approve_slot", "title": "Approve Treatment Slot"}, {"id": "request_notes", "title": "Request Extra Notes"}],
+      "audit_headline": "Payer declined eligibility for P. Rao",
+      "audit_detail_lines": [
+        "Case ID: case-b7719a",
+        "Payer: PAYER-ACME  |  CPT: D2740",
+        "Outcome: PRIOR_AUTH_REQUIRED",
+        "Rule rationale: Rule ACME-D2740-v1: Requires pre-treatment X-ray per ACME dental policy section 7.1"
+      ]
+    },
+    "activity_log": [
+      {"offset_minutes": 0, "event": "CREATED", "actor": "system", "detail": "Inbound SMS intake received (WhatsApp unavailable, SMS fallback used)."},
+      {"offset_minutes": 1, "event": "AGENT_INTAKE", "actor": "agent", "detail": "Intake agent extracted insurance card (confidence 90.6%)."},
+      {"offset_minutes": 2, "event": "AGENT_VERIFICATION", "actor": "agent", "detail": "Verification agent matched rule ACME-D2740-v1, prior auth required."},
+      {"offset_minutes": 3, "event": "PAYER_CHECK", "actor": "agent", "detail": "Simulated payer IVR call returned eligible=false - X-ray outside required window."},
+      {"offset_minutes": 4, "event": "STATUS_CHANGED", "actor": "system", "detail": "Status changed OPEN -> DENIED"},
+      {"offset_minutes": 4, "event": "NOTIFIED", "actor": "system", "detail": "Patient SMS notification sent, audit email dispatched to billing."},
+      {"offset_minutes": 180, "event": "STATUS_CHANGED", "actor": "staff:jfernandes", "detail": "Status changed DENIED -> DENIED (appeal submitted to payer, follow-up in 5 business days)"}
+    ]
+  }
+]

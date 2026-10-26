@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import clsx from "clsx";
 import { usePayerRules } from "../hooks/useCases";
+import { AddRuleModal } from "../components/AddRuleModal";
 import type { PayerRule } from "../types/case";
 
 /**
@@ -13,6 +14,7 @@ export function RuleExplorer() {
   const { data, isLoading, isError } = usePayerRules();
   const [payerFilter, setPayerFilter] = useState<string>("ALL");
   const [search, setSearch] = useState("");
+  const [showAddRule, setShowAddRule] = useState(false);
 
   const payers = useMemo(
     () => Array.from(new Set((data?.rules ?? []).map((r) => r.payer_id))).sort(),
@@ -35,13 +37,23 @@ export function RuleExplorer() {
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-[28px] font-semibold tracking-tight text-ink-900">Rule Explorer</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          The deterministic payer/CPT rule table that decides every prior-authorization outcome.
-          No model ever touches this data - see{" "}
-          <code className="rounded bg-ink-100 px-1 py-0.5 text-xs text-ink-700">agent_app/rules_engine.py</code>.
-        </p>
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-serif text-[28px] font-semibold tracking-tight text-ink-900">Rule Explorer</h1>
+          <p className="mt-1 text-sm text-ink-600">
+            The deterministic payer/CPT rule table that decides every prior-authorization outcome.
+            Coverage decisions come from these rules alone - no AI model ever changes an outcome.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAddRule(true)}
+          className="flex items-center gap-1.5 rounded-xl bg-gradient-to-b from-brand-600 to-brand-700 px-4 py-2.5 text-sm font-semibold text-white shadow-raised transition hover:from-brand-500 hover:to-brand-600 active:translate-y-px"
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
+            <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" />
+          </svg>
+          Add rule
+        </button>
       </header>
 
       <div className="glass-panel mb-5 flex flex-wrap items-center gap-3 rounded-2xl p-2">
@@ -65,7 +77,7 @@ export function RuleExplorer() {
                 "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
                 payerFilter === p
                   ? "bg-gradient-to-b from-brand-600 to-brand-700 text-white shadow-raised"
-                  : "text-ink-500 hover:bg-white hover:text-ink-800"
+                  : "text-ink-600 hover:bg-white hover:text-ink-800"
               )}
             >
               {p.replace("PAYER-", "")}
@@ -76,11 +88,11 @@ export function RuleExplorer() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search CPT code, procedure, rule ID..."
-          className="min-w-[260px] flex-1 rounded-xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-ink-800 outline-none placeholder:text-ink-400 focus:border-brand-400 focus:bg-white focus:ring-1 focus:ring-brand-400"
+          className="min-w-[260px] flex-1 rounded-xl border border-white/60 bg-white/70 px-3 py-2 text-sm text-ink-800 outline-none placeholder:text-ink-500 focus:border-brand-400 focus:bg-white focus:ring-1 focus:ring-brand-400"
         />
       </div>
 
-      {isLoading && <div className="py-16 text-center text-sm text-ink-400">Loading rules...</div>}
+      {isLoading && <div className="py-16 text-center text-sm text-ink-500">Loading rules...</div>}
       {isError && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           Failed to load payer rules.
@@ -92,6 +104,8 @@ export function RuleExplorer() {
           <RuleCard key={r.rule_id} rule={r} />
         ))}
       </div>
+
+      {showAddRule && <AddRuleModal onClose={() => setShowAddRule(false)} />}
     </div>
   );
 }

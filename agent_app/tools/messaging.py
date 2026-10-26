@@ -76,16 +76,35 @@ def draft_doctor_approval_card(
     procedure_name: str,
     cpt_code: str,
     outcome: str,
+    symptom_summary: Optional[str] = None,
+    payer_name: Optional[str] = None,
+    member_id: Optional[str] = None,
+    rationale: Optional[str] = None,
+    approval_code: Optional[str] = None,
     missing_documents: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Draft the RCS action card sent to the clinic/doctor for approval.
+    """Draft the clinical approval card sent to the clinic/doctor.
+
+    This card is what the attending doctor reads to make a 1-tap approval
+    decision, so it must carry the CLINICAL CONTEXT - not just the
+    procedure code. Include the patient's symptom summary (transcribed from
+    their voice note by the Intake agent), the insurance/payer details, the
+    coverage determination, and the payer approval code when present.
 
     Args:
-        patient_name: patient's display name (use a masked/short identifier
-            if the full name is not available, never invent one).
+        patient_name: patient's display name (masked/short identifier if the
+            full name is unknown - never invent one).
         procedure_name: human-readable procedure description.
         cpt_code: the CPT/procedure code.
         outcome: the prior-auth outcome string from check_prior_auth.
+        symptom_summary: the patient's reported symptoms/reason for visit, as
+            transcribed from their voice note (quote the Intake agent's
+            summary - do not embellish with clinical detail the patient
+            didn't state).
+        payer_name: insurance company/plan name from the extracted card.
+        member_id: member/subscriber ID from the extracted card.
+        rationale: the rules_engine rationale (quote verbatim, no paraphrase).
+        approval_code: payer approval code, if verification occurred.
         missing_documents: document types still outstanding, if any.
 
     Returns:
@@ -94,18 +113,33 @@ def draft_doctor_approval_card(
     """
     missing_documents = missing_documents or []
     status_line = {
-        "NOT_REQUIRED": "No prior authorization required.",
-        "PRIOR_AUTH_REQUIRED": "Prior authorization verified with payer.",
-        "INCOMPLETE_INFO": f"Missing documents: {', '.join(missing_documents) or 'see case'}.",
-        "NO_MATCHING_RULE": "No matching payer rule - manual review needed.",
+        "NOT_REQUIRED": "Prior auth: NOT required.",
+        "PRIOR_AUTH_REQUIRED": "Prior auth: REQUIRED - verified with payer.",
+        "INCOMPLETE_INFO": f"Prior auth: INCOMPLETE - missing {', '.join(missing_documents) or 'documents'}.",
+        "NO_MATCHING_RULE": "Prior auth: NO matching rule - manual review needed.",
     }.get(outcome, "Status unknown.")
 
+    lines = [f"Patient: {patient_name}"]
+    if symptom_summary:
+        lines.append(f"Reported symptoms: {symptom_summary}")
+    lines.append(f"Procedure: {procedure_name} ({cpt_code})")
+
+    payer_bits = []
+    if payer_name:
+        payer_bits.append(payer_name)
+    if member_id:
+        payer_bits.append(f"Member {member_id}")
+    if payer_bits:
+        lines.append("Insurance: " + " | ".join(payer_bits))
+
+    lines.append(status_line)
+    if rationale:
+        lines.append(f"Rule: {rationale}")
+    if approval_code:
+        lines.append(f"Approval code: {approval_code}")
+
     return {
-        "body": (
-            f"Patient: {patient_name}\n"
-            f"Procedure: {procedure_name} ({cpt_code})\n"
-            f"{status_line}"
-        ),
+        "body": "\n".join(lines),
         "buttons": [
             {"id": "approve_slot", "title": "Approve Treatment Slot"},
             {"id": "request_notes", "title": "Request Extra Notes"},

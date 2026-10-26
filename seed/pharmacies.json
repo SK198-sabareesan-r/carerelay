@@ -1,0 +1,17 @@
+[
+  {
+    "pharmacy_id": "pharm-01",
+    "name": "Apollo Pharmacy - MG Road",
+    "address": "12 MG Road, near City Hospital"
+  },
+  {
+    "pharmacy_id": "pharm-02",
+    "name": "MedPlus - Anna Nagar",
+    "address": "48 Anna Nagar Main Road"
+  },
+  {
+    "pharmacy_id": "pharm-03",
+    "name": "Clinic In-House Pharmacy",
+    "address": "Ground floor, same building as the clinic"
+  }
+]

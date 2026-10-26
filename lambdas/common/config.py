@@ -49,6 +49,7 @@ INTAKE_EVENTS_TABLE = _get("INTAKE_EVENTS_TABLE", "carerelay-intake-events-local
 PRIOR_AUTH_TABLE = _get("PRIOR_AUTH_TABLE", "carerelay-prior-auth-local")
 PAYER_RULES_TABLE = _get("PAYER_RULES_TABLE", "carerelay-payer-rules-local")
 STAFF_USERS_TABLE = _get("STAFF_USERS_TABLE", "carerelay-staff-users-local")
+APPOINTMENTS_TABLE = _get("APPOINTMENTS_TABLE", "carerelay-appointments-local")
 
 # --- Amazon Bedrock (narration/summarization only - never decisioning) ---
 # Claude Sonnet 4.6 (global cross-region inference) is natively multimodal
@@ -81,6 +82,10 @@ META_APP_SECRET = _get("META_APP_SECRET", "")
 META_WEBHOOK_VERIFY_TOKEN = _get("META_WEBHOOK_VERIFY_TOKEN", "")
 
 # --- AWS End User Messaging SMS / RCS (doctor approval card) ---
+# RCS is agent-based: the doctor card is sent via send_rcs_message with the
+# RCS agent ID as the origination identity (e.g. "rcs-..."), created by
+# scripts/setup_rcs_agent.py. RCS_PHONE_NUMBER_ID is legacy/unused.
+RCS_AGENT_ID = _get("RCS_AGENT_ID", "")
 RCS_PHONE_NUMBER_ID = _get("RCS_PHONE_NUMBER_ID", "")
 SMS_ORIGINATION_NUMBER = _get("SMS_ORIGINATION_NUMBER", "")
 
@@ -92,6 +97,23 @@ def clinic_approver_numbers() -> list:
 
 # --- Amazon SES ---
 SES_SENDER = _get("SES_SENDER", "")
+
+# While the SES account is in the sandbox, mail can only be delivered to
+# VERIFIED identities. Set this to a single verified address (e.g. the
+# SES_SENDER itself) to redirect EVERY outbound SES recipient - onboarding
+# emails, audit/payer emails - to that address, so nothing silently fails
+# with MessageRejected during the demo. Leave blank once SES production
+# access is granted, so mail goes to its real intended recipients again.
+SES_SANDBOX_OVERRIDE_RECIPIENT = _get("SES_SANDBOX_OVERRIDE_RECIPIENT", "")
+
+
+def resolve_ses_recipients(intended: list) -> list:
+    """If SES_SANDBOX_OVERRIDE_RECIPIENT is set, every intended recipient is
+    replaced by that single verified address (sandbox safety). Otherwise the
+    intended list is returned unchanged."""
+    if SES_SANDBOX_OVERRIDE_RECIPIENT:
+        return [SES_SANDBOX_OVERRIDE_RECIPIENT]
+    return intended
 
 
 def ses_command_recipients() -> list:

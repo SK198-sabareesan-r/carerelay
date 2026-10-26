@@ -195,10 +195,15 @@ def send_onboarding_email(
     html = _render_html(display_name, hospital_name, hospital_id, username, role)
     text = _render_text(display_name, hospital_name, hospital_id, username, role)
 
+    # In SES sandbox, redirect to the verified override address so the
+    # send doesn't fail just because the hospital's signup email isn't a
+    # verified SES identity (see config.resolve_ses_recipients).
+    recipients = config.resolve_ses_recipients([to_address])
+
     client = aws_clients.ses()
     resp = client.send_email(
         FromEmailAddress=config.SES_SENDER,
-        Destination={"ToAddresses": [to_address]},
+        Destination={"ToAddresses": recipients},
         Content={
             "Simple": {
                 "Subject": {"Data": subject, "Charset": "UTF-8"},
@@ -210,5 +215,6 @@ def send_onboarding_email(
         },
     )
     message_id = resp.get("MessageId")
-    log_event(logger, "info", "onboarding_email.sent", message_id=message_id, to=to_address)
+    log_event(logger, "info", "onboarding_email.sent", message_id=message_id, to=recipients[0],
+              intended=to_address)
     return message_id

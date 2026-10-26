@@ -103,8 +103,8 @@ export function AppShell() {
               <div className="truncate text-xs font-semibold text-ink-700">
                 {session?.display_name ?? "Clinic Staff"}
               </div>
-              <div className="truncate text-[10px] leading-tight text-ink-400">
-                {session?.role ?? "Strands on Amazon Bedrock AgentCore"}
+              <div className="truncate text-[10px] leading-tight text-ink-500">
+                {session?.role ?? "Clinic Staff"}
               </div>
             </div>
             <button

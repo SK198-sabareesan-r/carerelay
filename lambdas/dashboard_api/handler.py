@@ -1,13 +1,34 @@
-"""dashboard_api Lambda - read-only API backing the CareRelay frontend
-application (frontend/).
+"""dashboard_api Lambda - API backing the CareRelay frontend application
+(frontend/).
 
 Routes (API Gateway proxy):
-    GET  /cases                -> list of cases, newest first
-    GET  /cases/{id}           -> single case detail, incl. agent_trace
-    GET  /payer-rules          -> the deterministic PayerRulesTable contents
-    GET  /stats                -> aggregate counters for the analytics view
-    POST /auth/signup          -> create a clinic staff account
-    POST /auth/login           -> verify credentials, return the staff profile
+    GET   /cases                   -> list of cases, newest first
+                                       optional ?from=YYYY-MM-DD&to=YYYY-MM-DD
+                                       filters by created_at date (inclusive)
+    GET   /cases/{id}              -> single case detail, incl. agent_trace
+                                       and the full timestamped activity_log
+    POST  /followups               -> staff starts the follow-up flow after an
+                                       in-person consult (patient phone, procedure,
+                                       intended appointment datetime, has_insurance).
+                                       Creates the case pending + sends the first
+                                       WhatsApp request (card+voice if insured,
+                                       voice-only if self-pay). The appointment
+                                       datetime is withheld from the patient until
+                                       clearance/approval.
+    POST  /cases                   -> manually log a new intake (staff-entered,
+                                       e.g. a phone/walk-in case with no WhatsApp
+                                       message behind it)
+    PATCH /cases/{id}/status       -> update a case's status, appends an
+                                       activity_log entry
+    POST  /cases/{id}/message      -> staff sends a free-text WhatsApp message
+                                       to the case's patient directly (outside
+                                       the agent-drafted flow), appends an
+                                       activity_log entry
+    GET   /payer-rules             -> the deterministic PayerRulesTable contents
+    POST  /payer-rules             -> add a new payer/CPT coverage rule
+    GET   /stats                   -> aggregate counters for the analytics view
+    POST  /auth/signup             -> create a clinic staff account
+    POST  /auth/login              -> verify credentials, return the staff profile
 
 StaffUsersTable item shape (written/read by the /auth/* routes only).
 Composite key (hospital_id, username) - multiple hospitals can each register
@@ -53,6 +74,11 @@ PriorAuthTable item shape (written by channel_dispatcher, read here):
       "status": "OPEN" | "APPROVED" | "DENIED" | "AWAITING_DOCUMENTS",
       "patient_name": "...",            # display name only, never raw PHI id
       "patient_phone_masked": "***1234",
+      "patient_phone": "+1555...",      # raw number, WRITE-ONLY from this API's
+                                         # perspective - used internally by
+                                         # _handle_send_message to reply over
+                                         # WhatsApp, never included in _present()
+      "phone_number_id": "...",         # WhatsApp origination phone-number-id to reply from
       "channel": "whatsapp",
       "cpt_code": "29881",
       "procedure_name": "...",
@@ -66,14 +92,31 @@ PriorAuthTable item shape (written by channel_dispatcher, read here):
       "narration": "...",               # raw agent narration, debug only
     }
 
-This Lambda is READ-ONLY and never writes. It is deliberately the only
-surface exposed to the browser.
+Every case carries an `activity_log` - a list of timestamped entries
+appended on creation and on every status change:
+    {
+      "timestamp": "2026-...Z",
+      "event": "CREATED" | "STATUS_CHANGED" | ...,
+      "actor": "staff:pnair" | "system" | "agent",
+      "detail": "free-text description of what happened",
+    }
+This is the per-case audit trail the console timeline renders - every
+change traces back to a logged, timestamped entry rather than being
+inferred from the current state alone.
+
+This Lambda also accepts a small set of staff-initiated writes (manual case
+logging, status updates, payer-rule authoring) in addition to the
+auth/read routes - it is intentionally NOT purely read-only, unlike an
+earlier revision of this docstring.
 
 SECURITY NOTE: unauthenticated by default so the demo/dashboard works with
 zero setup. patient_phone_masked is pre-masked at write time by
 channel_dispatcher; this API never returns the raw phone number. Add an
 authorizer (Cognito/Lambda/API key) before any real deployment - see
-docs/DASHBOARD.md.
+docs/DASHBOARD.md. Because writes are unauthenticated, `actor` on
+staff-initiated activity_log entries is self-reported by the client
+(whatever `actor` the request body sends) - do not treat it as a verified
+identity until an authorizer is added.
 """
 import hashlib
 import hmac
@@ -120,8 +163,17 @@ def _hospital_id(hospital_name: str) -> str:
 _CORS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "content-type",
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
     "Content-Type": "application/json",
+}
+
+_VALID_STATUSES = {
+    "OPEN", "APPROVED", "DENIED", "AWAITING_DOCUMENTS",
+    # Follow-up flow lifecycle states.
+    "AWAITING_INSURANCE_DOCS",   # insured: waiting for card photo + voice note
+    "AWAITING_VOICE_NOTE",       # self-pay: waiting for voice note
+    "PENDING_DOCTOR_APPROVAL",   # self-pay: voice received, awaiting doctor's tap
+    "SCHEDULED",                 # appointment date/time released to the patient
 }
 
 
@@ -132,6 +184,7 @@ def handler(event, context):
 
     path = event.get("path") or event.get("resource") or ""
     path_params = event.get("pathParameters") or {}
+    query_params = event.get("queryStringParameters") or {}
     case_id = path_params.get("id")
 
     try:
@@ -141,16 +194,32 @@ def handler(event, context):
             return _handle_login(_parse_body(event))
 
         if "/payer-rules" in path:
+            if method == "POST":
+                return _handle_create_rule(_parse_body(event))
             return _respond(200, {"rules": _list_payer_rules()})
+
         if "/stats" in path:
-            return _respond(200, _compute_stats())
+            return _respond(200, _compute_stats(query_params))
+
+        if case_id and "/status" in path:
+            return _handle_update_status(case_id, _parse_body(event))
+
+        if case_id and method == "POST" and "/message" in path:
+            return _handle_send_message(case_id, _parse_body(event))
+
         if case_id:
             item = _get_case(case_id)
             if not item:
                 return _respond(404, {"error": "case not found"})
             return _respond(200, {"case": _present(item, detail=True)})
 
-        items = _list_cases()
+        if method == "POST" and "/followups" in path:
+            return _handle_start_followup(_parse_body(event))
+
+        if method == "POST" and "/cases" in path:
+            return _handle_create_case(_parse_body(event))
+
+        items = _list_cases(query_params)
         return _respond(200, {"cases": [_present(i) for i in items], "count": len(items)})
     except Exception as exc:  # noqa: BLE001
         log_event(logger, "error", "dashboard.failed", path=path, error=str(exc))
@@ -303,8 +372,10 @@ def _rules_table():
     return aws_clients.dynamodb_resource().Table(config.PAYER_RULES_TABLE)
 
 
-def _list_cases() -> List[Dict[str, Any]]:
-    """Scan + sort newest-first.
+def _list_cases(query_params: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    """Scan + sort newest-first, optionally filtered to a created_at date
+    range via ?from=YYYY-MM-DD&to=YYYY-MM-DD (both inclusive, UTC calendar
+    days). No `from`/`to` -> no filtering (full page).
 
     Demo-scale volume (tens to low hundreds of cases), so a bounded scan is
     the simplest correct approach. For production volume, query the
@@ -313,12 +384,348 @@ def _list_cases() -> List[Dict[str, Any]]:
     resp = _cases_table().scan(Limit=_PAGE_LIMIT)
     items = resp.get("Items", [])
     items.sort(key=lambda i: str(i.get("created_at", "")), reverse=True)
+
+    query_params = query_params or {}
+    date_from = (query_params.get("from") or "").strip()
+    date_to = (query_params.get("to") or "").strip()
+    if date_from or date_to:
+        lo = date_from or "0000-00-00"
+        hi = (date_to or "9999-99-99") + "T23:59:59.999999Z"
+        items = [i for i in items if lo <= str(i.get("created_at", "")) <= hi]
     return items
 
 
 def _get_case(case_id: str):
     resp = _cases_table().get_item(Key={"case_id": case_id})
     return resp.get("Item")
+
+
+def _append_activity(case_id: str, event: str, actor: str, detail: str) -> None:
+    entry = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        "actor": actor,
+        "detail": detail,
+    }
+    _cases_table().update_item(
+        Key={"case_id": case_id},
+        UpdateExpression="SET activity_log = list_append(if_not_exists(activity_log, :empty), :entry)",
+        ExpressionAttributeValues={":empty": [], ":entry": [entry]},
+    )
+
+
+def _handle_start_followup(body: Dict[str, Any]):
+    """Staff-initiated follow-up flow (the primary CareRelay workflow).
+
+    After an in-person consult, a doctor/staff member decides the patient
+    needs a future scheduled procedure/diagnosis. They start the follow-up
+    here with the patient's phone, the procedure, the intended appointment
+    date/time, and whether the patient HAS INSURANCE. This:
+
+      1. Creates the case in the correct pending state and stores the
+         intended appointment_datetime WITHHELD (appointment_released=False) -
+         the patient is NOT told the date/time yet.
+      2. Associates the patient with the staff member's hospital
+         (patient_directory) so a later WhatsApp reply is tagged correctly.
+      3. Sends the FIRST WhatsApp request to the patient:
+         - insured  -> ask for insurance card photo + a voice note (symptoms)
+         - self-pay -> ask for a voice note only (symptoms/reason)
+
+    The appointment date/time is released to the patient only later: once
+    insurance clearance completes (insured path) or the doctor approves
+    (self-pay path). That release happens in channel_dispatcher, not here.
+    """
+    import uuid
+
+    patient_name = str(body.get("patient_name", "")).strip()
+    patient_phone = str(body.get("patient_phone", "")).strip()
+    cpt_code = str(body.get("cpt_code", "")).strip()
+    procedure_name = str(body.get("procedure_name", "")).strip()
+    payer_id = str(body.get("payer_id", "")).strip()
+    has_insurance = bool(body.get("has_insurance", False))
+    appointment_datetime = str(body.get("appointment_datetime", "")).strip()
+    actor = str(body.get("actor", "")).strip() or "staff"
+    hospital_id = str(body.get("hospital_id", "")).strip()
+    hospital_name = str(body.get("hospital_name", "")).strip()
+
+    if not patient_name or not patient_phone or not procedure_name:
+        return _respond(400, {"error": "patient_name, patient_phone, and procedure_name are required."})
+    if not appointment_datetime:
+        return _respond(400, {"error": "appointment_datetime (intended slot) is required."})
+    if has_insurance and (not cpt_code or not payer_id):
+        return _respond(400, {"error": "cpt_code and payer_id are required for an insured follow-up."})
+
+    phone_digits = re.sub(r"[^0-9]", "", patient_phone)
+    flow = "followup_insured" if has_insurance else "followup_selfpay"
+    status = "AWAITING_INSURANCE_DOCS" if has_insurance else "AWAITING_VOICE_NOTE"
+    case_id = f"case-{uuid.uuid4().hex[:8]}"
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    item = {
+        "case_id": case_id,
+        "created_at": now,
+        "status": status,
+        "flow": flow,
+        "channel": "whatsapp",
+        "has_insurance": has_insurance,
+        "appointment_datetime": appointment_datetime,
+        "appointment_released": False,
+        "hospital_id": hospital_id or None,
+        "hospital_name": hospital_name or None,
+        "patient_name": patient_name,
+        "patient_phone_masked": f"***{phone_digits[-4:]}" if len(phone_digits) >= 4 else phone_digits,
+        "patient_phone": phone_digits,
+        "phone_number_id": config.WHATSAPP_PHONE_NUMBER_ID,
+        "cpt_code": cpt_code or None,
+        "procedure_name": procedure_name,
+        "payer_id": payer_id or None,
+        "extracted_card": {},
+        "verification": {},
+        "messages": {},
+        "perceived_facts": [],
+        "activity_log": [{
+            "timestamp": now,
+            "event": "FOLLOWUP_INITIATED",
+            "actor": f"staff:{actor}",
+            "detail": (
+                f"Follow-up started for a {'insured' if has_insurance else 'self-pay'} patient. "
+                f"Intended appointment {appointment_datetime} (withheld until "
+                f"{'insurance clearance' if has_insurance else 'doctor approval'})."
+            ),
+        }],
+    }
+    _cases_table().put_item(Item={k: v for k, v in item.items() if v not in (None, "")})
+
+    # Associate patient -> hospital so a later WhatsApp reply inherits it.
+    if hospital_id:
+        try:
+            from common import patient_directory
+
+            patient_directory.associate_patient(
+                patient_phone=phone_digits, hospital_id=hospital_id,
+                hospital_name=hospital_name, patient_name=patient_name,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, "warning", "followup.associate.failed", error=str(exc))
+
+    # Send the first WhatsApp request to the patient.
+    first_message_sent = False
+    if has_insurance:
+        body_text = (
+            f"Hello {patient_name.split(' ')[0]}, this is {hospital_name or 'your clinic'}. "
+            "Your doctor has recommended a follow-up procedure. To process your insurance "
+            "coverage, please reply with:\n"
+            "- A clear photo of your insurance card (front side)\n"
+            "- A short voice note describing your symptoms / reason for the visit"
+        )
+    else:
+        body_text = (
+            f"Hello {patient_name.split(' ')[0]}, this is {hospital_name or 'your clinic'}. "
+            "Your doctor has recommended a follow-up visit. To confirm, please reply with a "
+            "short voice note describing your symptoms / reason for the visit."
+        )
+    try:
+        from common import channels
+
+        msg = channels.build_whatsapp_text(to=phone_digits, body=body_text)
+        channels.send_whatsapp(msg, config.WHATSAPP_PHONE_NUMBER_ID)
+        first_message_sent = True
+        log_event(logger, "info", "followup.request_sent", case_id=case_id, flow=flow)
+    except Exception as exc:  # noqa: BLE001 - case still created even if the first message fails
+        log_event(logger, "warning", "followup.request_send_failed", case_id=case_id, error=str(exc))
+
+    # Seed the conversation transcript with this first outbound request so
+    # the console WhatsApp thread shows it immediately.
+    if first_message_sent:
+        try:
+            from common import transcript
+
+            transcript.append(case_id, transcript.DIRECTION_OUTBOUND, body_text,
+                              kind="text", actor=f"staff:{actor}")
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, "warning", "followup.transcript_failed", case_id=case_id, error=str(exc))
+
+    return _respond(201, {"case": _present(_get_case(case_id) or item, detail=True)})
+
+
+def _handle_create_case(body: Dict[str, Any]):
+    """Manually log a staff-entered intake (e.g. a phone/walk-in case with
+    no WhatsApp message behind it). Runs the SAME deterministic rules_engine
+    logic the agent pipeline uses, so a manually-logged case gets a real
+    verification outcome rather than a placeholder."""
+    import uuid
+
+    patient_name = str(body.get("patient_name", "")).strip()
+    cpt_code = str(body.get("cpt_code", "")).strip()
+    procedure_name = str(body.get("procedure_name", "")).strip()
+    payer_id = str(body.get("payer_id", "")).strip()
+    channel = str(body.get("channel", "whatsapp")).strip().lower()
+    patient_phone_masked = str(body.get("patient_phone_masked", "")).strip() or "***0000"
+    patient_phone = str(body.get("patient_phone", "")).strip()  # optional: enables POST /cases/{id}/message later
+    actor = str(body.get("actor", "")).strip() or "staff"
+    # Multi-tenancy (Option A): a console-logged case is tagged with the
+    # authenticated staff member's own hospital, sent by the frontend from
+    # the signed-in session.
+    hospital_id = str(body.get("hospital_id", "")).strip()
+    hospital_name = str(body.get("hospital_name", "")).strip()
+
+    if not patient_name or not cpt_code or not procedure_name or not payer_id:
+        return _respond(400, {
+            "error": "patient_name, cpt_code, procedure_name, and payer_id are required."
+        })
+    if channel not in {"whatsapp", "rcs", "sms"}:
+        return _respond(400, {"error": "channel must be one of: whatsapp, rcs, sms."})
+
+    verification = _evaluate_rules(payer_id, cpt_code)
+    status = "AWAITING_DOCUMENTS" if verification["missing_documents"] else (
+        "APPROVED" if not verification["requires_prior_auth"] else "OPEN"
+    )
+
+    case_id = f"case-{uuid.uuid4().hex[:8]}"
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    item = {
+        "case_id": case_id,
+        "created_at": now,
+        "status": status,
+        "channel": channel,
+        "hospital_id": hospital_id or None,
+        "hospital_name": hospital_name or None,
+        "patient_name": patient_name,
+        "patient_phone_masked": patient_phone_masked,
+        "patient_phone": patient_phone or None,
+        "phone_number_id": config.WHATSAPP_PHONE_NUMBER_ID if patient_phone and channel == "whatsapp" else None,
+        "cpt_code": cpt_code,
+        "procedure_name": procedure_name,
+        "payer_id": payer_id,
+        "extracted_card": {},
+        "verification": verification,
+        "messages": {},
+        "perceived_facts": [],
+        "activity_log": [{
+            "timestamp": now,
+            "event": "CREATED",
+            "actor": f"staff:{actor}",
+            "detail": f"Case manually logged via console ({channel}).",
+        }],
+    }
+    _cases_table().put_item(Item=item)
+    log_event(logger, "info", "case.created", case_id=case_id, actor=actor)
+    return _respond(201, {"case": _present(item, detail=True)})
+
+
+def _handle_update_status(case_id: str, body: Dict[str, Any]):
+    new_status = str(body.get("status", "")).strip().upper()
+    actor = str(body.get("actor", "")).strip() or "staff"
+    note = str(body.get("note", "")).strip()
+
+    if new_status not in _VALID_STATUSES:
+        return _respond(400, {"error": f"status must be one of: {', '.join(sorted(_VALID_STATUSES))}."})
+
+    item = _get_case(case_id)
+    if not item:
+        return _respond(404, {"error": "case not found"})
+
+    old_status = item.get("status", "OPEN")
+    _cases_table().update_item(
+        Key={"case_id": case_id},
+        UpdateExpression="SET #s = :new_status",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":new_status": new_status},
+    )
+    detail = f"Status changed {old_status} -> {new_status}" + (f" ({note})" if note else "")
+    _append_activity(case_id, "STATUS_CHANGED", f"staff:{actor}", detail)
+    log_event(logger, "info", "case.status_changed", case_id=case_id, old=old_status, new=new_status)
+
+    updated = _get_case(case_id)
+    return _respond(200, {"case": _present(updated, detail=True)})
+
+
+def _handle_send_message(case_id: str, body: Dict[str, Any]):
+    """Lets staff send a free-text WhatsApp message directly to the
+    patient tied to a case - e.g. answering a question the automated flow
+    didn't anticipate, or following up manually. This bypasses the agent
+    entirely (no drafting, no rules_engine involvement) - the message body
+    is exactly what the staff member typed, sent verbatim.
+
+    Requires patient_phone + phone_number_id to have been stored on the
+    case (written by channel_dispatcher when it creates the case from a
+    real WhatsApp intake - see channel_dispatcher.handler._persist_case).
+    A manually-logged case created via POST /cases has no WhatsApp thread
+    behind it, so this will 400 for those unless a phone number was
+    provided at creation time."""
+    text = str(body.get("text", "")).strip()
+    actor = str(body.get("actor", "")).strip() or "staff"
+
+    if not text:
+        return _respond(400, {"error": "text is required."})
+    if len(text) > 4096:
+        return _respond(400, {"error": "text must be 4096 characters or fewer."})
+
+    item = _get_case(case_id)
+    if not item:
+        return _respond(404, {"error": "case not found"})
+
+    patient_phone = item.get("patient_phone")
+    if not patient_phone:
+        return _respond(400, {
+            "error": "This case has no WhatsApp thread to reply to (no patient phone number on file)."
+        })
+
+    from common import channels
+
+    phone_number_id = item.get("phone_number_id") or config.WHATSAPP_PHONE_NUMBER_ID
+    message_id = None
+    try:
+        msg = channels.build_whatsapp_text(to=patient_phone, body=text)
+        message_id = channels.send_whatsapp(msg, phone_number_id)
+    except Exception as exc:  # noqa: BLE001
+        log_event(logger, "warning", "staff_message.send.failed", case_id=case_id, error=str(exc))
+        return _respond(502, {"error": "Could not send the WhatsApp message. Please try again."})
+
+    _append_activity(
+        case_id, "STAFF_MESSAGE_SENT", f"staff:{actor}",
+        f"Sent a WhatsApp message to the patient: \"{text[:200]}\"",
+    )
+    try:
+        from common import transcript
+
+        transcript.append(case_id, transcript.DIRECTION_OUTBOUND, text,
+                          kind="text", actor=f"staff:{actor}")
+    except Exception as exc:  # noqa: BLE001
+        log_event(logger, "warning", "staff_message.transcript_failed", case_id=case_id, error=str(exc))
+    log_event(logger, "info", "staff_message.sent", case_id=case_id, actor=actor, message_id=message_id)
+
+    updated = _get_case(case_id)
+    return _respond(200, {"case": _present(updated, detail=True)})
+
+
+def _evaluate_rules(payer_id: str, cpt_code: str) -> Dict[str, Any]:
+    """Thin wrapper around agent_app.rules_engine.evaluate() so manually
+    logged cases get the SAME deterministic outcome the agent pipeline
+    would produce - never a hand-rolled placeholder decision. No documents
+    are on file yet for a freshly-logged case, so missing_documents will
+    equal the rule's full required_documents list until updated."""
+    import sys
+
+    _lambdas_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _repo_root = os.path.dirname(_lambdas_dir)
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    from agent_app import rules_engine
+
+    rules = _list_payer_rules()
+    decision = rules_engine.evaluate(payer_id, cpt_code, documents_on_file=[], rules=rules)
+    result = decision.to_dict()
+    return {
+        "outcome": result.get("outcome"),
+        "requires_prior_auth": result.get("requires_prior_auth", False),
+        "missing_documents": result.get("missing_documents", []),
+        "matched_rule_id": result.get("matched_rule_id"),
+        "rationale": result.get("rationale", ""),
+        "payer_simulated": False,
+        "payer_eligible": None,
+        "approval_code": None,
+    }
 
 
 def _list_payer_rules() -> List[Dict[str, Any]]:
@@ -328,8 +735,38 @@ def _list_payer_rules() -> List[Dict[str, Any]]:
     return [_num_safe(i) for i in items]
 
 
-def _compute_stats() -> Dict[str, Any]:
-    items = _list_cases()
+def _handle_create_rule(body: Dict[str, Any]):
+    payer_id = str(body.get("payer_id", "")).strip()
+    cpt_code = str(body.get("cpt_code", "")).strip()
+    procedure_name = str(body.get("procedure_name", "")).strip()
+    requires_prior_auth = bool(body.get("requires_prior_auth", False))
+    required_documents = body.get("required_documents") or []
+    rule_id = str(body.get("rule_id", "")).strip()
+    notes = str(body.get("notes", "")).strip()
+
+    if not payer_id or not cpt_code or not procedure_name or not rule_id:
+        return _respond(400, {
+            "error": "payer_id, cpt_code, procedure_name, and rule_id are required."
+        })
+    if not isinstance(required_documents, list) or not all(isinstance(d, str) for d in required_documents):
+        return _respond(400, {"error": "required_documents must be a list of strings."})
+
+    item = {
+        "payer_id": payer_id,
+        "cpt_code": cpt_code,
+        "procedure_name": procedure_name,
+        "requires_prior_auth": requires_prior_auth,
+        "required_documents": required_documents,
+        "rule_id": rule_id,
+        "notes": notes,
+    }
+    _rules_table().put_item(Item=item)
+    log_event(logger, "info", "payer_rule.created", rule_id=rule_id, payer_id=payer_id, cpt_code=cpt_code)
+    return _respond(201, {"rule": item})
+
+
+def _compute_stats(query_params: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    items = _list_cases(query_params)
     outcomes = Counter(i.get("verification", {}).get("outcome", "UNKNOWN") for i in items)
     statuses = Counter(i.get("status", "UNKNOWN") for i in items)
     channels = Counter(i.get("channel", "unknown") for i in items)
@@ -377,6 +814,12 @@ def _present(item: Dict[str, Any], detail: bool = False) -> Dict[str, Any]:
         "created_at": item.get("created_at"),
         "status": item.get("status", "OPEN"),
         "channel": item.get("channel"),
+        "flow": item.get("flow"),
+        "has_insurance": item.get("has_insurance"),
+        "appointment_datetime": item.get("appointment_datetime"),
+        "appointment_released": item.get("appointment_released", False),
+        "hospital_id": item.get("hospital_id"),
+        "hospital_name": item.get("hospital_name"),
         "patient_name": item.get("patient_name"),
         "patient_phone_masked": item.get("patient_phone_masked"),
         "cpt_code": item.get("cpt_code"),
@@ -394,6 +837,12 @@ def _present(item: Dict[str, Any], detail: bool = False) -> Dict[str, Any]:
             "photo_url": _presign(item.get("photo_key")),
             "audio_url": _presign(item.get("audio_key")),
             "agent_trace": _agent_trace(item),
+            "activity_log": _num_safe(item.get("activity_log", [])),
+            "transcript": _num_safe(item.get("transcript", [])),
+            "payer_emails": _num_safe(item.get("payer_emails", [])),
+            # Tells the frontend whether POST /cases/{id}/message is usable
+            # for this case, WITHOUT ever exposing the raw patient_phone.
+            "can_message_patient": bool(item.get("patient_phone")),
         })
     return out
 
@@ -438,13 +887,26 @@ def _agent_trace(item: Dict[str, Any]) -> List[Dict[str, Any]]:
         },
     ]
 
+    # Legacy seeded cases may carry payer_simulated/IVR fields from an
+    # earlier revision; render them if present so their traces stay
+    # complete. New cases contact the payer by email only (below).
     if verification.get("payer_simulated"):
         trace.append({
             "agent": "Verification",
-            "tool": "call_payer_ivr (SIMULATED)",
+            "tool": "call_payer_ivr (SIMULATED, legacy)",
             "detail": [
                 f"eligible = {verification.get('payer_eligible')}",
                 f"approval_code = {verification.get('approval_code') or 'n/a'}",
+            ],
+        })
+
+    if verification.get("outcome") == "PRIOR_AUTH_REQUIRED":
+        trace.append({
+            "agent": "Notification",
+            "tool": "send_payer_prior_auth_request (Amazon SES)",
+            "detail": [
+                "Formal written prior-authorization request emailed to the payer's intake inbox.",
+                "CareRelay contacts the payer by email only - no IVR/phone call.",
             ],
         })
 

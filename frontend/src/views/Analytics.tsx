@@ -31,12 +31,18 @@ const OUTCOME_LABELS: Record<string, string> = {
   NO_MATCHING_RULE: "No matching rule",
 };
 
-const STATUS_COLORS: Record<string, [string, string]> = {
-  OPEN: ["#94a3b8", "#475569"],
-  APPROVED: ["#34d399", "#0f766e"],
-  DENIED: ["#fb7185", "#9f1239"],
-  AWAITING_DOCUMENTS: ["#fbbf24", "#b45309"],
-};
+// Same lifecycle grouping the Intake Queue uses, so the two views agree on
+// what each stage means and how cases roll up into it.
+const STATUS_STAGES: { label: string; statuses: string[]; color: [string, string] }[] = [
+  {
+    label: "Awaiting patient",
+    statuses: ["AWAITING_INSURANCE_DOCS", "AWAITING_VOICE_NOTE", "AWAITING_DOCUMENTS", "OPEN"],
+    color: ["#fbbf24", "#b45309"],
+  },
+  { label: "Pending approval", statuses: ["PENDING_DOCTOR_APPROVAL"], color: ["#38bdf8", "#0369a1"] },
+  { label: "Scheduled", statuses: ["SCHEDULED", "APPROVED"], color: ["#34d399", "#0f766e"] },
+  { label: "Denied", statuses: ["DENIED"], color: ["#fb7185", "#9f1239"] },
+];
 
 const TOOLTIP_STYLE = {
   background: "rgba(255,255,255,0.96)",
@@ -52,7 +58,7 @@ export function Analytics() {
   const { data: stats, isLoading } = useStats();
 
   if (isLoading || !stats) {
-    return <div className="px-8 py-16 text-center text-sm text-ink-400">Loading analytics...</div>;
+    return <div className="px-8 py-16 text-center text-sm text-ink-500">Loading analytics...</div>;
   }
 
   const outcomeData = Object.entries(stats.by_outcome).map(([key, value]) => ({
@@ -71,28 +77,22 @@ export function Analytics() {
     count,
   }));
 
-  const eligibilityRate =
-    stats.payer_simulated_calls > 0
-      ? Math.round((stats.payer_eligible_calls / stats.payer_simulated_calls) * 100)
-      : null;
+  const priorAuthRequired = stats.by_outcome?.PRIOR_AUTH_REQUIRED ?? 0;
+  const scheduledCount = (stats.by_status?.SCHEDULED ?? 0) + (stats.by_status?.APPROVED ?? 0);
 
   return (
     <div className="mx-auto max-w-6xl px-8 py-8">
       <header className="mb-6">
         <h1 className="font-serif text-[28px] font-semibold tracking-tight text-ink-900">Analytics</h1>
-        <p className="mt-1 text-sm text-ink-500">
-          Aggregate view across all prior-authorization cases processed by the agent pipeline.
+        <p className="mt-1 text-sm text-ink-600">
+          Aggregate view across all prior-authorization cases processed by the system.
         </p>
       </header>
 
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatTile label="Total cases" value={stats.total_cases} />
-        <StatTile label="Simulated payer calls" value={stats.payer_simulated_calls} accent="default" />
-        <StatTile
-          label="Payer eligibility rate"
-          value={eligibilityRate != null ? `${eligibilityRate}%` : "—"}
-          accent="brand"
-        />
+        <StatTile label="Prior auth required" value={priorAuthRequired} accent="amber" />
+        <StatTile label="Scheduled / approved" value={scheduledCount} accent="brand" />
         <StatTile
           label="Avg. card extraction confidence"
           value={stats.avg_card_extraction_confidence != null ? `${stats.avg_card_extraction_confidence}%` : "—"}
@@ -182,7 +182,7 @@ export function Analytics() {
                   </filter>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#d9e8e4" horizontal={false} />
-                <XAxis type="number" stroke="#9aa3ad" fontSize={12} allowDecimals={false} />
+                <XAxis type="number" stroke="#717b86" fontSize={12} allowDecimals={false} />
                 <YAxis type="category" dataKey="doc" stroke="#4f5861" fontSize={12} width={140} />
                 <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} cursor={{ fill: "#e3f1ee" }} />
                 <Bar dataKey="count" fill="url(#grad-missing)" radius={[0, 8, 8, 0]} filter="url(#bar-shadow-h)">
@@ -207,7 +207,7 @@ export function Analytics() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#d9e8e4" vertical={false} />
               <XAxis dataKey="channel" stroke="#4f5861" fontSize={12} />
-              <YAxis stroke="#9aa3ad" fontSize={12} allowDecimals={false} />
+              <YAxis stroke="#717b86" fontSize={12} allowDecimals={false} />
               <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} cursor={{ fill: "#e3f1ee" }} />
               <Bar dataKey="count" fill="url(#grad-channel)" radius={[8, 8, 0, 0]} filter="url(#bar-shadow-v)" maxBarSize={64}>
                 <LabelList dataKey="count" position="top" style={{ fill: "#0f3f3a", fontWeight: 700, fontSize: 13 }} />
@@ -216,15 +216,16 @@ export function Analytics() {
           </ResponsiveContainer>
         </Panel>
 
-        <Panel title="Case status breakdown">
+        <Panel title="Case lifecycle stage">
           <div className="space-y-4 py-2">
-            {Object.entries(stats.by_status).map(([status, count]) => {
-              const [light, dark] = STATUS_COLORS[status] ?? ["#cbd5e1", "#475569"];
+            {STATUS_STAGES.map((stage) => {
+              const count = stage.statuses.reduce((sum, s) => sum + (stats.by_status?.[s] ?? 0), 0);
+              const [light, dark] = stage.color;
               const pct = stats.total_cases ? (count / stats.total_cases) * 100 : 0;
               return (
-                <div key={status}>
+                <div key={stage.label}>
                   <div className="flex justify-between text-xs">
-                    <span className="font-semibold text-ink-700">{status.replace(/_/g, " ")}</span>
+                    <span className="font-semibold text-ink-700">{stage.label}</span>
                     <span className="font-bold text-ink-800">{count}</span>
                   </div>
                   <div className="mt-1.5 h-3 overflow-hidden rounded-full bg-ink-100 shadow-[inset_0_1px_2px_rgba(15,63,58,0.15)]">
@@ -253,5 +254,5 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 function EmptyState({ text }: { text: string }) {
-  return <div className="flex h-[200px] items-center justify-center text-sm text-ink-400">{text}</div>;
+  return <div className="flex h-[200px] items-center justify-center text-sm text-ink-500">{text}</div>;
 }

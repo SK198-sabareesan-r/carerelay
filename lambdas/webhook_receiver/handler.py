@@ -27,7 +27,7 @@ import time
 from common import aws_clients, config
 from common.logging_utils import get_logger, log_event
 from common.sns_parser import parse_sns_record
-from common.models import InboundIntakeMessage, KIND_IMAGE, KIND_AUDIO
+from common.models import InboundIntakeMessage, KIND_IMAGE, KIND_AUDIO, CHANNEL_WHATSAPP
 from common import channels
 
 logger = get_logger("webhook_receiver")
@@ -132,11 +132,66 @@ def _store_all(msgs) -> int:
         try:
             _enrich_and_store(m)
             count += 1
+            _maybe_send_acknowledgment(m)
         except Exception as exc:  # noqa: BLE001
             log_event(
                 logger, "error", "store.failed", message_id=m.message_id, error=str(exc)
             )
     return count
+
+
+def _maybe_send_acknowledgment(m: InboundIntakeMessage) -> None:
+    """Send a one-time "we got it, processing" reply the moment a patient's
+    message is first stored - NOT the final verification result, which
+    still comes later from channel_dispatcher once the agent pipeline
+    completes. Without this, a patient who sends a card photo hears
+    nothing for up to the full 15s batching window (see
+    INTAKE_BATCH_WINDOW_SECONDS), which reads as the message having failed.
+
+    Only WhatsApp button taps are skipped (a button tap is itself a reply
+    to something we already sent - acknowledging it would be redundant).
+    Every other kind (text, image, audio) gets acknowledged once.
+
+    De-duplicated per-sender using a short TTL marker row in the SAME
+    IntakeEventsTable (pk=PATIENT#<sender>, sk=ACK#<window>) so a rapid
+    burst (card photo + voice note + text, all within the same intake
+    batching window) triggers exactly ONE acknowledgment, not one per
+    message - avoids spamming the patient with duplicate "got it" replies."""
+    from common.models import KIND_BUTTON
+
+    if m.kind == KIND_BUTTON:
+        return
+
+    window_seconds = config.INTAKE_BATCH_WINDOW_SECONDS or 15
+    window_bucket = int(m.timestamp) // window_seconds if str(m.timestamp).isdigit() else int(time.time()) // window_seconds
+    ack_key = {"pk": f"PATIENT#{m.sender}", "sk": f"ACK#{window_bucket}"}
+
+    table = aws_clients.dynamodb_resource().Table(config.INTAKE_EVENTS_TABLE)
+    try:
+        table.put_item(
+            Item={**ack_key, "ttl": int(time.time()) + 300},
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+    except Exception as exc:  # noqa: BLE001
+        # ConditionalCheckFailedException means another message in this
+        # same burst already claimed the ack for this window - skip
+        # silently, this is the expected de-dup path, not an error.
+        if "ConditionalCheckFailedException" not in str(exc):
+            log_event(logger, "warning", "ack.dedup_check.failed", error=str(exc))
+        return
+
+    if m.channel != CHANNEL_WHATSAPP:
+        return  # ack is WhatsApp-only for now; RCS/SMS intake isn't wired to this path
+
+    ack_message = channels.build_whatsapp_text(
+        to=m.sender,
+        body="Thanks - we've received your message and are reviewing it now. We'll follow up shortly.",
+    )
+    try:
+        channels.send_whatsapp(ack_message, m.phone_number_id)
+        log_event(logger, "info", "ack.sent", sender=m.sender)
+    except Exception as exc:  # noqa: BLE001 - never block storage on ack failure
+        log_event(logger, "warning", "ack.send.failed", error=str(exc))
 
 
 def _enrich_and_store(m: InboundIntakeMessage) -> None:

@@ -1,4 +1,12 @@
-import type { CaseDetail, CaseSummary, PayerRule, Stats } from "../types/case";
+import type {
+  CaseDetail,
+  CaseSummary,
+  DraftedMessages,
+  PayerEmail,
+  PayerRule,
+  Stats,
+  TranscriptMessage,
+} from "../types/case";
 
 /**
  * Deterministic mock dataset so the console is fully demo-able with zero
@@ -10,6 +18,9 @@ import type { CaseDetail, CaseSummary, PayerRule, Stats } from "../types/case";
 const now = Date.now();
 const minutesAgo = (m: number) => new Date(now - m * 60_000).toISOString();
 
+// Mutable in mock mode so "Add case"/"Add rule"/status updates in the UI
+// persist for the rest of the session (mirrors the real DynamoDB writes the
+// live API performs) without needing any backend.
 export const mockCases: CaseSummary[] = [
   {
     case_id: "case-7f3a1c",
@@ -295,10 +306,42 @@ function buildAgentTrace(c: CaseSummary, messages: CaseDetail["messages"], facts
   return trace;
 }
 
+function buildActivityLog(c: CaseSummary): CaseDetail["activity_log"] {
+  const created = new Date(c.created_at);
+  const at = (mins: number) => new Date(created.getTime() + mins * 60_000).toISOString();
+  const log: CaseDetail["activity_log"] = [
+    { timestamp: at(0), event: "CREATED", actor: "system", detail: `Inbound ${c.channel} intake received.` },
+    { timestamp: at(1), event: "AGENT_PROCESSED", actor: "agent", detail: "Insurance card read and documents captured." },
+    {
+      timestamp: at(2),
+      event: "PAYER_CHECK",
+      actor: "agent",
+      detail: `Coverage checked - matched rule ${c.verification.matched_rule_id ?? "n/a"}.`,
+    },
+  ];
+  if (c.verification.outcome === "PRIOR_AUTH_REQUIRED") {
+    log.push({
+      timestamp: at(3),
+      event: "NOTIFIED",
+      actor: "system",
+      detail: "Prior-authorization request emailed to the payer.",
+    });
+  }
+  log.push({ timestamp: at(4), event: "NOTIFIED", actor: "system", detail: "Patient and doctor notified." });
+  return log;
+}
+
 export function mockCaseDetail(caseId: string): CaseDetail | undefined {
   const summary = mockCases.find((c) => c.case_id === caseId);
   if (!summary) return undefined;
-  const messages = mockMessages[caseId];
+  const messages = mockMessages[caseId] ?? {
+    patient_message_body: "",
+    patient_message_buttons: [],
+    doctor_card_body: "",
+    doctor_card_buttons: [],
+    audit_headline: "",
+    audit_detail_lines: [],
+  };
   const facts = mockFacts[caseId] ?? [];
   return {
     ...summary,
@@ -308,7 +351,100 @@ export function mockCaseDetail(caseId: string): CaseDetail | undefined {
     photo_url: null,
     audio_url: null,
     agent_trace: buildAgentTrace(summary, messages, facts),
+    activity_log: buildActivityLog(summary),
+    transcript: buildMockTranscript(summary, messages),
+    payer_emails: buildMockPayerEmails(summary),
+    // Mirrors the backend rule: a case only has a reply-able WhatsApp
+    // thread if it came in via WhatsApp (channel_dispatcher only stores
+    // patient_phone for that channel - see handler.py's _persist_case).
+    can_message_patient: summary.channel === "whatsapp",
   };
+}
+
+/**
+ * Builds a representative WhatsApp conversation for mock/demo mode so the
+ * realtime thread view has content to render. In live mode this comes from
+ * the backend `transcript` field instead.
+ */
+function buildMockTranscript(
+  summary: CaseSummary,
+  messages: DraftedMessages
+): TranscriptMessage[] {
+  if (summary.channel !== "whatsapp") return [];
+  const base = new Date(summary.created_at).getTime();
+  const t = (offsetMin: number) => new Date(base + offsetMin * 60_000).toISOString();
+  const first = (summary.patient_name.split(" ")[0] || "there").replace(/\*+/g, "");
+
+  const thread: TranscriptMessage[] = [
+    {
+      direction: "outbound",
+      kind: "text",
+      body: `Hello ${first || "there"}, this is ${summary.hospital_name || "your clinic"}. Your doctor has recommended a follow-up for ${summary.procedure_name}. To process your insurance, please reply with a clear photo of your insurance card and a short voice note describing your symptoms.`,
+      actor: "staff",
+      timestamp: t(0),
+    },
+    { direction: "inbound", kind: "image", body: "Insurance card photo", actor: "patient", timestamp: t(3) },
+    { direction: "inbound", kind: "audio", body: "Voice note", actor: "patient", timestamp: t(4) },
+  ];
+  if (messages.patient_message_body) {
+    thread.push({
+      direction: "outbound",
+      kind: "text",
+      body: messages.patient_message_body,
+      actor: "agent",
+      timestamp: t(5),
+    });
+  }
+  return thread;
+}
+
+/**
+ * Builds the hospital <-> payer prior-authorization email correspondence
+ * for mock/demo mode. Only populated when the case actually required prior
+ * authorization (mirrors the backend, which only emails the payer then).
+ */
+function buildMockPayerEmails(summary: CaseSummary): PayerEmail[] {
+  if (summary.verification.outcome !== "PRIOR_AUTH_REQUIRED") return [];
+  const base = new Date(summary.created_at).getTime();
+  const t = (offsetMin: number) => new Date(base + offsetMin * 60_000).toISOString();
+  const clinic = summary.hospital_name || "CareRelay Clinic";
+  const payer = summary.extracted_card.payer_name || summary.payer_id || "the payer";
+  const subject = `Prior Authorization Request - ${summary.procedure_name} (CPT ${summary.cpt_code})`;
+  return [
+    {
+      direction: "outbound",
+      subject,
+      from_addr: "priorauth@carerelay.health",
+      to_addr: "intake@payer.example.com",
+      from_label: clinic,
+      to_label: payer,
+      body:
+        `Formal prior-authorization request sent to ${payer} for ${summary.procedure_name} ` +
+        `(CPT ${summary.cpt_code}, member ${summary.extracted_card.member_id || "n/a"}). ` +
+        `Clinical justification and the matched coverage rule ` +
+        `(${summary.verification.matched_rule_id || "n/a"}) were included.`,
+      message_id: "ses-0a1b2c3d",
+      timestamp: t(6),
+    },
+    {
+      direction: "inbound",
+      subject: `RE: ${subject}`,
+      from_addr: "intake@payer.example.com",
+      to_addr: "priorauth@carerelay.health",
+      from_label: payer,
+      to_label: clinic,
+      body:
+        summary.verification.payer_eligible === false
+          ? "Prior authorization could not be confirmed at this time. Additional clinical documentation may be required before a determination is issued."
+          : "Prior authorization APPROVED for the requested procedure." +
+            (summary.verification.approval_code
+              ? ` Authorization reference: ${summary.verification.approval_code}.`
+              : "") +
+            " Please proceed and retain this reference for claims submission.",
+      message_id: null,
+      timestamp: t(42),
+    },
+  ];
 }
 
 export const mockPayerRules: PayerRule[] = [
