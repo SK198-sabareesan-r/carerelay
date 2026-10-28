@@ -96,6 +96,16 @@ def _deserialize(image: Dict[str, Any]) -> Dict[str, Any]:
 # Per-patient batch processing
 # --------------------------------------------------------------------------- #
 def _process_patient_batch(sender: str, msgs: List[Dict[str, Any]]) -> None:
+    # Drop malformed events with no real sender. A blank/"unknown" sender
+    # can never be messaged back, so processing it only produces endless
+    # "invalid destination" send failures - and because a raised exception
+    # marks the whole stream batch for RETRY, one such poison record would
+    # loop forever (until TTL), blocking and spamming the pipeline. Skip it
+    # cleanly instead (return = treat as successfully handled = no retry).
+    if not sender or sender in ("unknown", "PATIENT#unknown"):
+        log_event(logger, "warning", "batch.skipped.no_sender")
+        return
+
     channel = next((m.get("channel") for m in msgs if m.get("channel")), CHANNEL_WHATSAPP)
     phone_number_id = next((m.get("phone_number_id") for m in msgs if m.get("phone_number_id")), "")
 
@@ -284,7 +294,9 @@ def _process_followup_reply(
     case_id = case["case_id"]
     has_insurance = bool(case.get("has_insurance"))
 
-    card_key = next((m["s3_media_key"] for m in msgs if m.get("kind") == KIND_IMAGE and m.get("s3_media_key")), None)
+    # Collect ALL image keys in this batch (patient may send front + back
+    # together), not just the first one.
+    image_keys = [m["s3_media_key"] for m in msgs if m.get("kind") == KIND_IMAGE and m.get("s3_media_key")]
     voice_key = next((m["s3_media_key"] for m in msgs if m.get("kind") == KIND_AUDIO and m.get("s3_media_key")), None)
     voice_mime = next((m.get("media_mime") for m in msgs if m.get("kind") == KIND_AUDIO), None)
     text_parts = [m["text"] for m in msgs if m.get("kind") == KIND_TEXT and m.get("text")]
@@ -292,23 +304,41 @@ def _process_followup_reply(
 
     _record_inbound(case_id, msgs)
 
-    # Merge with anything already received on earlier turns for this case.
-    card_key = card_key or case.get("photo_key")
     voice_key = voice_key or case.get("audio_key")
 
     if has_insurance:
+        # Insured cases need BOTH sides of the insurance card (member id /
+        # group number are often only on the back) + a symptom voice note.
+        # Accumulate front, then back, across turns.
+        card_front = case.get("photo_key")
+        card_back = case.get("photo_key_back")
+        for key in image_keys:
+            if not card_front:
+                card_front = key
+            elif not card_back and key != card_front:
+                card_back = key
+
         missing = []
-        if not card_key:
-            missing.append("card_photo")
+        if not card_front:
+            missing.append("card_front")
+        elif not card_back:
+            missing.append("card_back")
         if not voice_key and not combined_text:
             missing.append("symptom_voice_note")
+
         if missing:
-            _persist_followup_partial(case_id, card_key=card_key, voice_key=voice_key)
+            _persist_followup_partial(case_id, card_key=card_front, card_back_key=card_back, voice_key=voice_key)
             _request_followup_inputs(sender, phone_number_id, channel, missing, case_id=case_id)
             log_event(logger, "info", "followup.awaiting_more", case_id=case_id, missing=missing)
             return
-        _run_insured_followup(sender, phone_number_id, channel, case, card_key, voice_key, voice_mime, combined_text)
+
+        _persist_followup_partial(case_id, card_key=card_front, card_back_key=card_back, voice_key=voice_key)
+        _run_insured_followup(sender, phone_number_id, channel, case, card_front, card_back,
+                              voice_key, voice_mime, combined_text)
         return
+
+    # Self-pay fallthrough uses the first image only (rarely relevant).
+    card_key = (image_keys[0] if image_keys else None) or case.get("photo_key")  # noqa: F841
 
     # Self-pay: just need a voice note (or text) describing the reason.
     if not voice_key and not combined_text:
@@ -338,12 +368,15 @@ def _record_inbound(case_id: str, msgs: List[Dict[str, Any]]) -> None:
         transcript.append_bubbles(case_id, bubbles)
 
 
-def _persist_followup_partial(case_id: str, *, card_key, voice_key) -> None:
+def _persist_followup_partial(case_id: str, *, card_key=None, card_back_key=None, voice_key=None) -> None:
     table = aws_clients.dynamodb_resource().Table(config.PRIOR_AUTH_TABLE)
     updates, vals = [], {}
     if card_key:
         updates.append("photo_key = :c")
         vals[":c"] = card_key
+    if card_back_key:
+        updates.append("photo_key_back = :cb")
+        vals[":cb"] = card_back_key
     if voice_key:
         updates.append("audio_key = :a")
         vals[":a"] = voice_key
@@ -360,16 +393,20 @@ def _request_followup_inputs(
 ) -> None:
     labels = {
         "card_photo": "- A clear photo of your insurance card (front side)",
+        "card_front": "- A clear photo of the FRONT of your insurance card",
+        "card_back": "- A clear photo of the BACK of your insurance card",
         "symptom_voice_note": "- A short voice note describing your symptoms / reason for the visit",
     }
     body = "Thanks! We still need:\n" + "\n".join(labels[m] for m in missing if m in labels)
     _send_text_or_sms(sender, phone_number_id, channel, body, case_id=case_id)
 
 
-def _run_insured_followup(sender, phone_number_id, channel, case, card_key, voice_key, voice_mime, combined_text) -> None:
-    """Insured path: run the agent to extract card + transcribe voice +
-    verify prior-auth, persist the result onto the existing case, email the
-    payer, and release the appointment date/time if cleared."""
+def _run_insured_followup(sender, phone_number_id, channel, case, card_key, card_back_key,
+                          voice_key, voice_mime, combined_text) -> None:
+    """Insured path: run the agent to extract card (front + back) +
+    transcribe voice + verify prior-auth, persist the result onto the
+    existing case, email the payer, and release the appointment date/time if
+    cleared."""
     case_id = case["case_id"]
     cpt_code = case.get("cpt_code") or _extract_cpt_code(combined_text) or _DEFAULT_CPT_CODE
     procedure_name = case.get("procedure_name") or (combined_text.strip()[:120] or _DEFAULT_PROCEDURE_NAME)
@@ -390,6 +427,9 @@ def _run_insured_followup(sender, phone_number_id, channel, case, card_key, voic
     if card_key:
         payload["card_s3_bucket"] = config.MEDIA_BUCKET
         payload["card_s3_key"] = card_key
+    if card_back_key:
+        payload["card_back_s3_bucket"] = config.MEDIA_BUCKET
+        payload["card_back_s3_key"] = card_back_key
     if voice_key:
         payload["voice_s3_bucket"] = config.MEDIA_BUCKET
         payload["voice_s3_key"] = voice_key
@@ -407,23 +447,50 @@ def _run_insured_followup(sender, phone_number_id, channel, case, card_key, voic
     case_result.setdefault("procedure_name", procedure_name)
     case_result.setdefault("hospital_name", case.get("hospital_name"))
 
-    _update_followup_after_agent(case_id, case_result, card_key, voice_key, outcome, has_insurance=True)
+    # Always write the agent result (extracted card, verification, drafted
+    # messages) to the case, and send the internal audit email.
+    messages = case_result.get("messages", {})
 
-    # Doctor card + audit email + payer email (payer only if prior auth required).
-    _send_doctor_card(case_result.get("messages", {}))
-    _send_audit_email(case_id, case.get("patient_name", ""), case_result)
-    if outcome == "PRIOR_AUTH_REQUIRED":
+    # "Prior auth applies" = the payer must be involved. This covers both
+    # PRIOR_AUTH_REQUIRED and INCOMPLETE_INFO (the latter means the rule
+    # applies but some clinical documents aren't on file yet - those are
+    # obtained via the payer request, not from the patient's card/voice). In
+    # BOTH cases we email the payer and wait for their confirmation; the
+    # doctor card is NOT sent until staff mark the payer response APPROVED.
+    if outcome in ("PRIOR_AUTH_REQUIRED", "INCOMPLETE_INFO"):
+        _update_followup_after_agent(
+            case_id, case_result, card_key, voice_key, outcome,
+            has_insurance=True, status="AWAITING_PAYER",
+        )
+        _send_audit_email(case_id, case.get("patient_name", ""), case_result)
         _send_payer_prior_auth_request(case_id, case.get("patient_name", ""), case_result)
-
-    # Insurance "cleared" = NOT_REQUIRED (no auth needed) or PRIOR_AUTH_REQUIRED
-    # with all docs present (the rules engine already confirmed completeness).
-    if outcome in ("NOT_REQUIRED", "PRIOR_AUTH_REQUIRED"):
-        _release_appointment(case, sender, phone_number_id, cleared_note="Your insurance has been verified.")
-    else:
-        # INCOMPLETE_INFO / NO_MATCHING_RULE: tell the patient we're still working on it.
-        body = ("Thanks - we've received your details and are completing your insurance "
-                "verification. We'll confirm your appointment time shortly.")
+        body = ("Thanks - we've verified your insurance card and sent a prior-authorization "
+                "request to your insurer. We'll message you as soon as they confirm coverage.")
         _send_text_or_sms(sender, phone_number_id, channel, body, case_id=case_id)
+        log_event(logger, "info", "followup.insured.awaiting_payer", case_id=case_id, outcome=outcome)
+        return
+
+    if outcome == "NOT_REQUIRED":
+        # No prior auth needed -> no payer step. Route straight to the doctor
+        # for a sign-off, then release the appointment on their approval.
+        _update_followup_after_agent(
+            case_id, case_result, card_key, voice_key, outcome,
+            has_insurance=True, status="PENDING_DOCTOR_APPROVAL",
+        )
+        _send_audit_email(case_id, case.get("patient_name", ""), case_result)
+        _send_doctor_card(messages)
+        body = ("Thanks - your insurance doesn't require prior authorization for this. "
+                "We've shared your details with the doctor and will confirm your appointment shortly.")
+        _send_text_or_sms(sender, phone_number_id, channel, body, case_id=case_id)
+        log_event(logger, "info", "followup.insured.not_required.pending_doctor", case_id=case_id)
+        return
+
+    # NO_MATCHING_RULE (payer/CPT not in catalog): persist for manual review.
+    _update_followup_after_agent(case_id, case_result, card_key, voice_key, outcome, has_insurance=True)
+    _send_audit_email(case_id, case.get("patient_name", ""), case_result)
+    body = ("Thanks - we've received your details and are completing your insurance "
+            "verification. We'll confirm your appointment time shortly.")
+    _send_text_or_sms(sender, phone_number_id, channel, body, case_id=case_id)
 
 
 def _run_selfpay_followup(sender, phone_number_id, channel, case, voice_key, voice_mime, combined_text) -> None:
@@ -566,11 +633,15 @@ def _release_appointment(case: Dict[str, Any], sender: str, phone_number_id: str
 
 
 def _handle_doctor_decision(approver: str, phone_number_id: str, channel: str, payload: str) -> None:
-    """A doctor tapped Approve / Request-Notes on a self-pay follow-up card.
+    """A doctor tapped Approve / Request-Notes on a follow-up approval card.
     The tap arrives from the DOCTOR's number, so we find the case by its
     PENDING_DOCTOR_APPROVAL state (oldest first), not by phone match.
 
-    Approve -> release the withheld appointment date/time to the patient.
+    Approve -> mark the case APPROVED (doctor signed off). The appointment
+    date/time is NOT auto-sent - staff message the patient the timing
+    manually from the console (POST /cases/{id}/message), which releases the
+    appointment. This keeps a human in the loop on the final patient-facing
+    confirmation.
     Request-Notes -> leave the case pending and ask the patient for more
     detail."""
     table = aws_clients.dynamodb_resource().Table(config.PRIOR_AUTH_TABLE)
@@ -589,11 +660,22 @@ def _handle_doctor_decision(approver: str, phone_number_id: str, channel: str, p
     patient_phone = case.get("patient_phone")
 
     if payload == "approve_slot":
-        if patient_phone:
-            _release_appointment(case, patient_phone, config.WHATSAPP_PHONE_NUMBER_ID,
-                                 cleared_note="Your visit has been approved by the doctor.")
-        _append_case_note(patient_phone or "", "DOCTOR_APPROVED", "doctor",
-                          "Doctor approved the self-pay follow-up visit; appointment released.")
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        table.update_item(
+            Key={"case_id": case_id},
+            UpdateExpression="SET #s = :s, activity_log = list_append(if_not_exists(activity_log, :e), :entry)",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": "APPROVED",
+                ":e": [],
+                ":entry": [{
+                    "timestamp": now,
+                    "event": "DOCTOR_APPROVED",
+                    "actor": "doctor",
+                    "detail": "Doctor approved the visit. Awaiting staff to send the appointment time to the patient.",
+                }],
+            },
+        )
         log_event(logger, "info", "doctor_decision.approved", case_id=case_id)
     else:  # request_notes
         if patient_phone:
@@ -792,22 +874,74 @@ def _media_format(mime: Optional[str], key: str) -> str:
 # AgentCore invocation
 # --------------------------------------------------------------------------- #
 def _invoke_agent(case_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    if not config.AGENT_RUNTIME_ARN:
-        log_event(logger, "warning", "agent.invoke.skipped.no_runtime_arn")
-        return {}
+    """Invoke the CareRelay Strands agent.
 
-    session_id = (_AGENT_SESSION_PREFIX + case_id + uuid.uuid4().hex)[:48]
-    client = aws_clients.agentcore_runtime()
-    resp = client.invoke_agent_runtime(
-        agentRuntimeArn=config.AGENT_RUNTIME_ARN,
-        runtimeSessionId=session_id,
-        payload=json.dumps(payload).encode("utf-8"),
-        qualifier="DEFAULT",
-    )
-    body = resp["response"].read()
-    result = json.loads(body)
-    log_event(logger, "info", "agent.invoke.done", case_id=case_id, status=resp.get("statusCode"))
-    return result
+    Primary path: the agent runs on AWS App Runner (a managed container
+    service hosting the same BedrockAgentCoreApp image). We POST the case
+    payload to its /invocations endpoint over HTTPS. AGENT_RUNNER_URL is the
+    App Runner service URL (set by scripts/deploy_app_runner.py).
+
+    Fallback path: if AGENT_RUNNER_URL is not set but AGENT_RUNTIME_ARN is,
+    invoke the Bedrock AgentCore Runtime instead (for when the AgentCore
+    quota is granted). If neither is set, the agent step is skipped - the
+    self-pay flow still works via its non-agent fallback.
+    """
+    runner_url = config.AGENT_RUNNER_URL
+    if runner_url:
+        return _invoke_agent_http(case_id, payload, runner_url)
+
+    if config.AGENT_RUNTIME_ARN:
+        session_id = (_AGENT_SESSION_PREFIX + case_id + uuid.uuid4().hex)[:48]
+        client = aws_clients.agentcore_runtime()
+        resp = client.invoke_agent_runtime(
+            agentRuntimeArn=config.AGENT_RUNTIME_ARN,
+            runtimeSessionId=session_id,
+            payload=json.dumps(payload).encode("utf-8"),
+            qualifier="DEFAULT",
+        )
+        body = resp["response"].read()
+        from decimal import Decimal
+
+        result = json.loads(body, parse_float=Decimal)
+        log_event(logger, "info", "agent.invoke.done", case_id=case_id,
+                  status=resp.get("statusCode"), via="agentcore")
+        return result
+
+    log_event(logger, "warning", "agent.invoke.skipped.no_endpoint")
+    return {}
+
+
+def _invoke_agent_http(case_id: str, payload: Dict[str, Any], base_url: str) -> Dict[str, Any]:
+    """POST the case payload to the agent's /invocations endpoint (App Runner).
+    The agent runs for up to ~2 min (voice transcription polling), so use a
+    generous timeout."""
+    import urllib.request
+    import urllib.error
+
+    url = base_url.rstrip("/") + "/invocations"
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:  # noqa: S310 - our own App Runner URL
+            body = resp.read()
+        # DynamoDB rejects Python floats - parse every JSON number that has a
+        # decimal point as Decimal up front (e.g. the card's confidence 0.96),
+        # so the agent result can be written to the case without a
+        # "Float types are not supported" error downstream.
+        from decimal import Decimal
+
+        result = json.loads(body, parse_float=Decimal)
+        log_event(logger, "info", "agent.invoke.done", case_id=case_id, via="apprunner")
+        return result
+    except urllib.error.HTTPError as exc:  # noqa: BLE001
+        detail = exc.read().decode("utf-8", "replace")[:500]
+        log_event(logger, "error", "agent.invoke.http_error", case_id=case_id,
+                  status=exc.code, detail=detail)
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        log_event(logger, "error", "agent.invoke.failed", case_id=case_id, error=str(exc))
+        return {}
 
 
 # --------------------------------------------------------------------------- #
@@ -1182,10 +1316,13 @@ def _send_audit_email(case_id: str, patient_name: str, case_result: Dict[str, An
     html_body = _render_audit_html(case_id, headline, detail_lines)
     text_body = f"{headline}\n\n" + "\n".join(detail_lines)
     signature = _sign_report(text_body)
+    # Sender name = the owning hospital for this case (falls back to the
+    # bare verified address if the case has no hospital association).
+    from_header = config.ses_from(case_result.get("hospital_name"))
 
     try:
         aws_clients.ses().send_email(
-            FromEmailAddress=config.SES_SENDER,
+            FromEmailAddress=from_header,
             Destination={"ToAddresses": recipients},
             Content={
                 "Simple": {

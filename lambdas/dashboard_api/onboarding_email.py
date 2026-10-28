@@ -202,7 +202,8 @@ def send_onboarding_email(
 
     client = aws_clients.ses()
     resp = client.send_email(
-        FromEmailAddress=config.SES_SENDER,
+        # Show the hospital as the sender name on the onboarding email.
+        FromEmailAddress=config.ses_from(hospital_name),
         Destination={"ToAddresses": recipients},
         Content={
             "Simple": {

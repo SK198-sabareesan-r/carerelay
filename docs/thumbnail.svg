@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" font-family="'Segoe UI',Arial,sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#06201d"/><stop offset="0.5" stop-color="#0b3f39"/><stop offset="1" stop-color="#0f766e"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5fe0cd"/><stop offset="1" stop-color="#0f3f3a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2fd9c0" stop-opacity="0.4"/><stop offset="1" stop-color="#2fd9c0" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="4" stdDeviation="10" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+    <marker id="fa" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5fe0cd"/></marker>
+  </defs>
+
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="1080" cy="90" r="300" fill="url(#glow)"/>
+  <circle cx="160" cy="650" r="220" fill="url(#glow)" opacity="0.5"/>
+
+  <!-- ===== Header ===== -->
+  <g transform="translate(56,34) scale(1.45)" filter="url(#soft)">
+    <path d="M32 4 L54 12 V30 C54 46 44 56 32 60 C20 56 10 46 10 30 V12 Z" fill="url(#shield)"/>
+    <path d="M32 4 L54 12 V30 C54 46 44 56 32 60" fill="#ffffff" fill-opacity="0.12"/>
+    <path d="M18 33h7l3.5-9 6 18 4-13h3.5l3-6h7.5" stroke="#ffffff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+  <text x="168" y="86" font-size="58" font-weight="800" fill="#ffffff" letter-spacing="-1">CareRelay</text>
+  <text x="172" y="120" font-size="21" font-weight="500" fill="#bff2e8">Agentic prior-authorization for clinics — over WhatsApp, RCS &amp; Email</text>
+
+  <g transform="translate(980,34)">
+    <rect x="0" y="0" width="244" height="36" rx="18" fill="#ffffff" fill-opacity="0.1" stroke="#5fe0cd" stroke-opacity="0.5"/>
+    <text x="122" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#d7f7f0">AWS CDS Agentic AI Hackathon 2026</text>
+  </g>
+  <g transform="translate(1046,80)">
+    <rect x="0" y="0" width="178" height="30" rx="15" fill="#5fe0cd" fill-opacity="0.16" stroke="#5fe0cd" stroke-opacity="0.55"/>
+    <text x="89" y="20" text-anchor="middle" font-size="12.5" font-weight="700" fill="#5fe0cd">Code decides · AI talks</text>
+  </g>
+
+  <!-- ===== FLOW STRIP ===== -->
+  <text x="56" y="176" font-size="14" font-weight="800" fill="#8fd8cc" letter-spacing="1">HOW IT WORKS</text>
+  <g font-size="14" font-weight="700" fill="#eafff9">
+    <g><rect x="56" y="192" width="150" height="72" rx="13" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.2"/>
+      <text x="131" y="226" text-anchor="middle" font-size="22">🧑‍🤝‍🧑</text>
+      <text x="131" y="250" text-anchor="middle">Patient</text></g>
+    <path d="M210 228 H236" stroke="#5fe0cd" stroke-width="2.5" marker-end="url(#fa)"/>
+    <g><rect x="240" y="192" width="188" height="72" rx="13" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.2"/>
+      <text x="334" y="222" text-anchor="middle">WhatsApp</text>
+      <text x="334" y="244" text-anchor="middle" font-size="10.5" font-weight="400" fill="#bff2e8">card front+back · voice</text></g>
+    <path d="M432 228 H458" stroke="#5fe0cd" stroke-width="2.5" marker-end="url(#fa)"/>
+    <g><rect x="462" y="192" width="210" height="72" rx="13" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.2"/>
+      <text x="567" y="222" text-anchor="middle">Event pipeline</text>
+      <text x="567" y="244" text-anchor="middle" font-size="10.5" font-weight="400" fill="#bff2e8">SNS · Lambda · DynamoDB</text></g>
+    <path d="M676 228 H702" stroke="#5fe0cd" stroke-width="2.5" marker-end="url(#fa)"/>
+    <g><rect x="706" y="192" width="272" height="72" rx="13" fill="#5fe0cd" fill-opacity="0.16" stroke="#5fe0cd" stroke-opacity="0.6"/>
+      <text x="842" y="222" text-anchor="middle" fill="#eafff9">Strands multi-agent · App Runner</text>
+      <text x="842" y="244" text-anchor="middle" font-size="10.5" font-weight="400" fill="#bff2e8">Bedrock vision + Transcribe + rules engine</text></g>
+    <path d="M982 228 H1008" stroke="#5fe0cd" stroke-width="2.5" marker-end="url(#fa)"/>
+    <g><rect x="1012" y="192" width="212" height="72" rx="13" fill="#ffffff" fill-opacity="0.08" stroke="#ffffff" stroke-opacity="0.2"/>
+      <text x="1118" y="222" text-anchor="middle">Clinic Console</text>
+      <text x="1118" y="244" text-anchor="middle" font-size="10.5" font-weight="400" fill="#bff2e8">React · AWS Amplify</text></g>
+  </g>
+  <!-- outputs line -->
+  <text x="56" y="298" font-size="12.5" fill="#8fd8cc">Outbound · <tspan fill="#eafff9" font-weight="700">WhatsApp</tspan> status to patient  ·  <tspan fill="#eafff9" font-weight="700">RCS / WhatsApp</tspan> approval card to doctor  ·  <tspan fill="#eafff9" font-weight="700">Amazon SES</tspan> prior-auth letter to payer</text>
+
+  <!-- ===== FEATURES ===== -->
+  <text x="56" y="346" font-size="14" font-weight="800" fill="#8fd8cc" letter-spacing="1">FEATURES</text>
+  <g font-size="14.5" font-weight="700" fill="#ffffff">
+    <!-- row 1 -->
+    <g><rect x="56" y="360" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="76" y="390" font-size="20">💬</text><text x="106" y="388">3 CDS channels</text>
+      <text x="76" y="414" font-size="11" font-weight="400" fill="#bff2e8">WhatsApp · RCS/SMS · Amazon SES</text></g>
+    <g><rect x="356" y="360" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="376" y="390" font-size="20">🤖</text><text x="406" y="388">Strands multi-agent</text>
+      <text x="376" y="414" font-size="11" font-weight="400" fill="#bff2e8">Supervisor + Intake · Verify · Notify</text></g>
+    <g><rect x="656" y="360" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="676" y="390" font-size="20">🪪</text><text x="706" y="388">Insurance-card OCR</text>
+      <text x="676" y="414" font-size="11" font-weight="400" fill="#bff2e8">Bedrock vision · front + back merged</text></g>
+    <g><rect x="956" y="360" width="268" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="976" y="390" font-size="20">🎙️</text><text x="1006" y="388">Voice → symptoms</text>
+      <text x="976" y="414" font-size="11" font-weight="400" fill="#bff2e8">Amazon Transcribe</text></g>
+    <!-- row 2 -->
+    <g><rect x="56" y="446" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="76" y="476" font-size="20">⚖️</text><text x="106" y="474">Deterministic rules</text>
+      <text x="76" y="500" font-size="11" font-weight="400" fill="#bff2e8">code decides · outcome traces to a rule</text></g>
+    <g><rect x="356" y="446" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="376" y="476" font-size="20">🏥</text><text x="406" y="474">Multi-tenant clinics</text>
+      <text x="376" y="500" font-size="11" font-weight="400" fill="#bff2e8">hospital-scoped sign up / sign in</text></g>
+    <g><rect x="656" y="446" width="282" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="676" y="476" font-size="20">📊</text><text x="706" y="474">Live clinic console</text>
+      <text x="676" y="500" font-size="11" font-weight="400" fill="#bff2e8">realtime thread · payer emails · analytics</text></g>
+    <g><rect x="956" y="446" width="268" height="74" rx="13" fill="#ffffff" fill-opacity="0.07" stroke="#5fe0cd" stroke-opacity="0.4"/>
+      <text x="976" y="476" font-size="20">🔐</text><text x="1006" y="474">KMS-signed audit</text>
+      <text x="976" y="500" font-size="11" font-weight="400" fill="#bff2e8">tamper-evident case reports</text></g>
+  </g>
+
+  <!-- ===== Lifecycle strip ===== -->
+  <text x="56" y="566" font-size="12.5" font-weight="700" fill="#8fd8cc">Case lifecycle:</text>
+  <g font-size="11" font-weight="700" fill="#06201d">
+    <g><rect x="176" y="552" width="150" height="26" rx="13" fill="#ffd98a"/><text x="251" y="569" text-anchor="middle">AWAITING PATIENT</text></g>
+    <text x="332" y="569" fill="#5fe0cd" font-size="13">›</text>
+    <g><rect x="346" y="552" width="140" height="26" rx="13" fill="#c9b6f6"/><text x="416" y="569" text-anchor="middle">AWAITING PAYER</text></g>
+    <text x="492" y="569" fill="#5fe0cd" font-size="13">›</text>
+    <g><rect x="506" y="552" width="196" height="26" rx="13" fill="#9bd7f7"/><text x="604" y="569" text-anchor="middle">PENDING DOCTOR APPROVAL</text></g>
+    <text x="708" y="569" fill="#5fe0cd" font-size="13">›</text>
+    <g><rect x="722" y="552" width="104" height="26" rx="13" fill="#8ff0cf"/><text x="774" y="569" text-anchor="middle">APPROVED</text></g>
+    <text x="832" y="569" fill="#5fe0cd" font-size="13">›</text>
+    <g><rect x="846" y="552" width="116" height="26" rx="13" fill="#6fe9d2"/><text x="904" y="569" text-anchor="middle">SCHEDULED</text></g>
+  </g>
+
+  <!-- ===== Tech bar ===== -->
+  <rect x="0" y="648" width="1280" height="72" fill="#061a18" fill-opacity="0.65"/>
+  <text x="56" y="692" font-size="16" fill="#bff2e8">Built on AWS · End User Messaging (WhatsApp/RCS/SMS) · SES · Bedrock AgentCore · Transcribe · Lambda · DynamoDB · SNS · S3 · App Runner · KMS</text>
+</svg>

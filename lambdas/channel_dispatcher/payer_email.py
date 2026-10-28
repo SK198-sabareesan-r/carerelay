@@ -178,7 +178,8 @@ def send_payer_prior_auth_request(ctx: Dict[str, Any]) -> Optional[str]:
 
     try:
         resp = aws_clients.ses().send_email(
-            FromEmailAddress=config.SES_SENDER,
+            # Show the requesting hospital as the sender name to the payer.
+            FromEmailAddress=config.ses_from(ctx.get("clinic_name")),
             Destination={"ToAddresses": recipients},
             Content={
                 "Simple": {

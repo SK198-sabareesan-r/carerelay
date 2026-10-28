@@ -1,7 +1,15 @@
 import { useState } from "react";
 import type { CaseStatus } from "../types/case";
 
-const STATUSES: CaseStatus[] = ["OPEN", "AWAITING_DOCUMENTS", "APPROVED", "DENIED"];
+const STATUSES: CaseStatus[] = [
+  "OPEN",
+  "AWAITING_DOCUMENTS",
+  "AWAITING_PAYER",
+  "PENDING_DOCTOR_APPROVAL",
+  "APPROVED",
+  "SCHEDULED",
+  "DENIED",
+];
 
 /**
  * Lets staff change a case's status directly from the console. Every

@@ -12,6 +12,7 @@ export type CaseStatus =
   // Follow-up flow lifecycle states.
   | "AWAITING_INSURANCE_DOCS"
   | "AWAITING_VOICE_NOTE"
+  | "AWAITING_PAYER"
   | "PENDING_DOCTOR_APPROVAL"
   | "SCHEDULED";
 

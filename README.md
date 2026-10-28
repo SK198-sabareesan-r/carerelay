@@ -1,165 +1,306 @@
 # CareRelay
 
-**Conversational prior-authorization for clinics**, powered by a **Strands multi-agent** backend on **Amazon Bedrock AgentCore Runtime**, with **AWS Communication Developer Services (CDS)** — WhatsApp, RCS/SMS, and SES — as the messaging backbone.
+**Conversational prior-authorization for clinics** — a **Strands multi-agent** system that turns the slow, phone-and-fax prior-authorization process into a simple WhatsApp conversation, powered end-to-end by **AWS Communication Developer Services (CDS)**: WhatsApp and RCS/SMS via **AWS End User Messaging**, and email via **Amazon SES**.
 
-Built for the **AWS CDS Agentic AI Hackathon (Sept. 2026)**.
-
-A patient sends a photo of their insurance card and a voice note describing their procedure over **WhatsApp**. A Strands multi-agent pipeline extracts the card details, checks the payer's prior-authorization rules deterministically, and replies with a status update — all without the patient ever leaving the chat. The clinic's doctor/approver gets an **RCS action card** to approve the visit slot, and billing staff get a **KMS-signed audit email** for every case. Clinic staff manage the whole queue from a web console with their own hospital-scoped login.
+Built for the **AWS CDS Agentic AI Hackathon (2026)**.
 
 ---
 
-## Why this fits AWS CDS
+## The problem
 
-- **WhatsApp (AWS End User Messaging Social)** — patient intake (photo + voice note) and status replies with interactive buttons. Meta owns the WhatsApp network itself (the WhatsApp Business Account); AWS End User Messaging Social is the bridge service that relays those messages into AWS. Per [AWS's own architecture](https://docs.aws.amazon.com/social-messaging/latest/userguide/managing-event-destinations.html), inbound events are delivered through an **Amazon SNS** topic as the required "event destination" — `CareRelay-InboundTopic` fans out to the `webhook_receiver` Lambda. SNS has no WhatsApp-specific logic; it's plain AWS plumbing sitting between the Meta-facing service and our Lambda code.
-- **RCS, falling back to SMS (AWS End User Messaging)** — doctor/clinic approval cards.
-- **Amazon SES** — KMS-signed audit report emails to billing/ops staff, and a staff-onboarding email when a hospital registers.
-- **Amazon Bedrock AgentCore Runtime** — hosts the Strands multi-agent backend as a container-based agent runtime, invoked per case by the `channel_dispatcher` Lambda.
+Prior authorization is one of the most expensive administrative burdens in healthcare. When a doctor recommends a procedure, someone on the clinic staff has to confirm the patient's insurance, gather documents, and get the payer's approval — a process that traditionally means phone calls, hold music, faxes, and days of back-and-forth before the patient can even be given an appointment time.
 
-No step in the actual coverage decision is made by a language model — see [Deterministic rules, not model guesses](#deterministic-rules-not-model-guesses) below.
+**CareRelay collapses that into a chat.** After an in-person consult, staff start a follow-up from the console. The patient receives a WhatsApp message, replies with a photo of their insurance card and a short voice note describing their symptoms, and the system does the rest: it reads the card, transcribes the voice note, checks the payer's coverage rules, emails the payer a formal request, routes the case to the doctor for approval, and — only once everything clears — releases the confirmed appointment date and time to the patient. The patient never leaves WhatsApp. Staff watch the whole thing happen in real time from a web console.
+
+---
+
+## What CareRelay does, end to end
+
+### The staff-initiated follow-up flow (the core workflow)
+
+This is the authoritative flow, modeled on how a real clinic actually works:
+
+1. **In-person consult.** A patient visits the clinic. The doctor decides they need a future procedure or diagnostic.
+2. **Staff start a follow-up** from the console: patient name, WhatsApp number (with country code), the recommended procedure, the intended appointment date/time, and whether the patient has insurance. The appointment time is **stored but withheld** — the patient is not told it yet.
+3. **CareRelay reaches out over WhatsApp.**
+   - **Insured patients** are asked for a photo of their insurance card **and** a voice note describing their symptoms.
+   - **Self-pay patients** are asked for a voice note only.
+4. **The patient replies in the chat.** CareRelay acknowledges each message.
+5. **The agent pipeline processes the reply** (details below): the insurance card is read by a vision model, the voice note is transcribed, and the payer's coverage rules are evaluated deterministically.
+6. **Clearance.**
+   - **Insured:** if prior authorization is required, CareRelay emails the payer a formal written request. Once coverage is confirmed, the case is cleared.
+   - **Self-pay:** the case is routed to the doctor, who approves (or requests more detail) with a one-tap action card.
+7. **The appointment is released.** Only now does the patient receive a WhatsApp message with their confirmed date, time, and visit instructions.
+
+Throughout, **the appointment date/time is never revealed until the case clears** — this mirrors real clinic policy and is a deliberate design choice.
+
+### Three communication channels, one case
+
+| Channel | AWS CDS service | Who it reaches | What it carries |
+|---|---|---|---|
+| **WhatsApp** | AWS End User Messaging Social | Patients | Document/voice requests, acknowledgements, status updates, interactive buttons and list pickers, and the final appointment confirmation |
+| **RCS** (falls back to WhatsApp/SMS) | AWS End User Messaging | Doctors / approvers | A rich approval card with Approve / Request-Notes actions, enriched with the patient's symptoms, payer, procedure, and the matched coverage rule |
+| **Email** | Amazon SES | Payers and clinic staff | Formal prior-authorization request letters to payers, case audit reports to staff, and hospital onboarding emails |
+
+CareRelay is **channel-adaptive**: it sends the doctor a native RCS rich card where AWS supports RCS, and automatically falls back to WhatsApp interactive buttons where it doesn't (for example, India), so the card always lands on a channel that actually works for that recipient.
 
 ---
 
 ## Multi-agent architecture (Strands)
 
-A **Supervisor** agent coordinates three specialist agents using Strands' "agents as tools" pattern — the specialists are plain Strands `Agent` instances passed directly into the supervisor's `tools` list:
+A **Supervisor** agent coordinates three specialist agents using Strands' "agents as tools" pattern — each specialist is a plain Strands `Agent` passed directly into the supervisor's `tools` list:
 
 ```
 Supervisor (carerelay_supervisor)
   │
-  ├─ 1. Intake Agent        -> extract_insurance_card (vision) + transcribe_voice_note
-  │                             returns: ExtractedCard fields, symptom summary
+  ├─ 1. Intake Agent        -> extract_insurance_card (Bedrock vision)
+  │                             + transcribe_voice_note (Amazon Transcribe)
+  │                             returns: card fields (payer, member ID, group),
+  │                                      symptom summary from the voice note
   │
   ├─ 2. Verification Agent  -> check_prior_auth (rules_engine.py, deterministic)
-  │                             + call_payer_ivr (simulated payer eligibility check)
-  │                             returns: outcome, missing_documents, rationale
-  │                             (ground truth - supervisor must not alter it)
+  │                             returns: outcome, missing documents, matched rule,
+  │                                      rationale  (ground truth — never altered)
   │
   └─ 3. Notification Agent  -> draft_patient_message, draft_doctor_approval_card,
                                 draft_audit_summary
-                                (drafts content only - never sends anything itself)
+                                (drafts wording only — never sends anything itself)
 ```
 
-The supervisor's output is constrained to a structured `CaseResult` schema (`agent_app/schemas.py`) — the agent cannot return free-text prose as its final answer. `agent_app/main.py` additionally **independently re-runs `rules_engine.evaluate()`** against the agent's reported outcome before accepting it (`_verify_against_rules_engine`), rejecting the result if the model's narration doesn't match what the deterministic rules engine actually computed. This guards against a model hallucinating a rule citation or outcome.
+The supervisor's output is constrained to a structured `CaseResult` schema (`agent_app/schemas.py`) — the agent cannot return free-text prose as its final answer.
 
-### Deterministic rules, not model guesses
+### "Code decides, AI talks"
 
-`agent_app/rules_engine.py` is a plain-Python rule evaluator over the `PayerRulesTable` (CPT code + payer -> requires-prior-auth / required documents). No agent or LLM call ever decides coverage — the Verification Agent's `check_prior_auth` tool calls this engine and returns its result verbatim. This was a deliberate design choice: a hackathon judge (or a real clinic) should be able to trust that "approved" means the deterministic rule table said so, not that a model guessed it.
+This is CareRelay's central design principle, and it's enforced, not just promised:
+
+- **`agent_app/rules_engine.py`** is a plain-Python rule evaluator over the payer rules table (payer + CPT → requires-prior-auth / required documents). **No LLM ever decides coverage.** The Verification Agent's tool calls this engine and returns its result verbatim.
+- **`agent_app/main.py` independently re-runs the rules engine** against whatever outcome the agent reported (`_verify_against_rules_engine`) and **rejects** the result if the model's narration doesn't match what the deterministic engine actually computed. This guards against a model fabricating a rule citation or outcome.
+
+The language model is used only to *extract* (read a card, transcribe a voice note) and to *phrase* (draft the patient/doctor/audit messages). Every coverage decision traces to a specific row in the rules table — auditable as data, in the console's Rule Explorer.
+
+---
+
+## Architecture
+
+![CareRelay architecture](docs/architecture.svg)
+
+> The full-resolution diagram is at [`docs/architecture.svg`](docs/architecture.svg). A text-rendered version follows for platforms that don't display SVG inline.
+
+```mermaid
+flowchart LR
+    %% ---- People ----
+    PT["Patients"]
+    DR["Doctors / Approvers"]
+    ST["Clinic and Billing Staff (many hospitals)"]
+    PY["Insurance Payers"]
+
+    %% ---- AWS CDS channels ----
+    subgraph CDS["AWS Communication Developer Services"]
+        WA["WhatsApp - End User Messaging Social"]
+        RCS["RCS to WhatsApp/SMS - End User Messaging"]
+        SES["Amazon SES - payer / audit / onboarding"]
+    end
+
+    %% ---- Event pipeline ----
+    subgraph PIPE["Event-driven pipeline on AWS"]
+        SNS["Amazon SNS CareRelay-InboundTopic"]
+        WH["Lambda webhook_receiver"]
+        DDBS["DynamoDB IntakeEventsTable (Streams)"]
+        CD["Lambda channel_dispatcher - drives the follow-up flow"]
+        API["API Gateway to Lambda dashboard_api"]
+    end
+
+    %% ---- Agent brain ----
+    subgraph BRAIN["Strands multi-agent on AWS App Runner"]
+        SUP["Supervisor Agent"]
+        IN["1 - Intake Agent: Bedrock vision + Transcribe"]
+        VER["2 - Verification Agent: rules_engine.py, NO LLM decision"]
+        NO["3 - Notification Agent: drafts wording only"]
+        SUP --> IN --> VER --> NO
+    end
+
+    %% ---- Data ----
+    subgraph DATA["Data and evidence"]
+        DDB["DynamoDB: cases / rules / staff / patients"]
+        S3["Amazon S3: card photos + voice notes"]
+        KMS["AWS KMS: signed audit reports"]
+    end
+
+    CON["Clinic Command Console - React on AWS Amplify"]
+
+    %% inbound
+    PT -->|card + voice| WA --> SNS --> WH --> DDBS --> CD
+    CD -->|HTTPS /invocations| SUP
+    VER --> DDB
+    IN --> S3
+    CD --> DDB
+    %% outbound via CDS
+    CD -->|status + appointment| WA -->|WhatsApp| PT
+    CD -->|approval card| RCS -->|RCS/WhatsApp| DR
+    CD -->|prior-auth request| SES -->|email| PY
+    CD -->|audit report| SES
+    %% console
+    ST --> CON
+    CON <--> API --> DDB
+    KMS -.signs.-> SES
+```
+
+CareRelay runs as a fully event-driven pipeline on real AWS infrastructure.
+
+**Services used:**
+
+- **AWS End User Messaging (Social + SMS/RCS)** — WhatsApp patient channel and RCS/SMS doctor channel.
+- **Amazon SES** — payer request letters, audit reports, onboarding emails.
+- **Amazon Bedrock** — the vision model for insurance-card extraction and the language model for message drafting (never for decisions).
+- **Amazon Transcribe** — voice-note speech-to-text.
+- **AWS App Runner** — hosts the containerized Strands agent (`BedrockAgentCoreApp`), auto-scaled with managed HTTPS. The same container image is AgentCore-Runtime-compatible, so it can move to Bedrock AgentCore Runtime unchanged.
+- **Amazon ECR** — stores the agent container image.
+- **AWS Lambda** — `webhook_receiver`, `channel_dispatcher`, `dashboard_api`.
+- **Amazon API Gateway** — REST API in front of the dashboard Lambda.
+- **Amazon DynamoDB (+ Streams)** — case data, payer rules, staff users, patients, intake events, appointments; the stream drives the event pipeline.
+- **Amazon S3** — insurance card photos and voice notes.
+- **Amazon SNS** — the inbound event destination that fans WhatsApp events out to the webhook Lambda.
+- **AWS Amplify Hosting** — serves the staff web console over HTTPS.
+- **AWS KMS** — asymmetric signing of audit reports for tamper-evidence.
+
+---
+
+## The staff web console ("Clinic Command Console")
+
+A React + TypeScript single-page app that gives clinic staff a live, auditable view of every case. Patients never see this — it's the operational cockpit for the clinic.
+
+**Views:**
+
+- **Analytics (home)** — outcome breakdown, case lifecycle stages, most-missing documents, channel mix, and extraction-confidence metrics.
+- **Intake Queue** — a live, searchable, filterable list of all cases, grouped into clear lifecycle stages (Awaiting patient → Pending approval → Scheduled → Denied) with per-stage counts. The **Start follow-up** action launches the core workflow.
+- **Case Detail** — four focused tabs:
+  - **Conversations** — a **real-time, WhatsApp-styled conversation thread** showing exactly what the patient sent and received (text, voice notes, card photos), with read receipts and the verified-business badge, plus a staff reply composer and the doctor approval card.
+  - **Payer emails** — the full hospital ↔ payer email correspondence (the request sent and the payer's response) with timestamps.
+  - **Processing log** — the step-by-step record of what happened to the case (documents captured, coverage checked, notifications sent), with the deterministic rule citation highlighted.
+  - **Timeline & evidence** — the case activity timeline, the extracted insurance-card fields, the captured voice/photo evidence, and the audit email.
+
+The console polls every few seconds, so the WhatsApp thread, case status, and payer correspondence update live as a patient replies.
+
+---
+
+## Multi-tenancy — built for many hospitals, many identities
+
+CareRelay is designed as a **multi-hospital platform**, not a single-clinic tool:
+
+- **Hospital-scoped accounts.** Each hospital registers through the console (name, address, contact email, contact phone) and receives a generated alphanumeric Hospital ID. Staff sign in with their Hospital ID + username + password (passwords hashed with PBKDF2-HMAC-SHA256). Multiple hospitals coexist, each with their own staff.
+- **Per-case hospital tagging.** When a hospital's staff start a follow-up, the patient is associated with that hospital. Later WhatsApp replies are routed and tagged to the correct hospital, so the payer letter, audit email, and console all reflect the owning hospital's name — resolved dynamically per case, never hardcoded.
+- **Multiple sender identities and numbers.** The messaging layer is parameterized, not fixed to one address or number. Each hospital can register its own SES sender identities and recipient inboxes, and WhatsApp/RCS/SMS origination identities are configured per deployment. Payer inboxes, clinic approver numbers, and audit recipients are all lists — a deployment can fan a single case out to several payer or staff addresses, and different hospitals can use entirely separate communication identities.
+- **Per-recipient channel resolution.** Doctor approver numbers are stored with country codes, and CareRelay chooses the right channel (RCS vs WhatsApp vs SMS) per number based on where each service is supported.
 
 ---
 
 ## Repository layout
 
 ```
-agent_app/                 Strands multi-agent backend (hosted on Bedrock AgentCore Runtime)
+agent_app/                 Strands multi-agent backend (containerized; runs on App Runner / AgentCore)
   agents/                  supervisor.py, intake_agent.py, verification_agent.py, notification_agent.py
-  tools/                   documents.py (vision card extraction), messaging.py (draft_* tools), verification.py
+  tools/                   documents.py (vision card extraction + Transcribe), messaging.py, verification.py
   rules_engine.py          Deterministic payer/CPT coverage rules (no model in the loop)
-  schemas.py               CaseResult / ExtractedCard / VerificationResult - the agent's structured contract
-  main.py                  AgentCore entrypoint + independent rules-engine cross-check
-  model_config.py          Bedrock model selection (shared boto3 session, see lambdas/common/aws_clients.py)
+  schemas.py               CaseResult / ExtractedCard / VerificationResult — the agent's structured contract
+  main.py                  HTTP entrypoint (BedrockAgentCoreApp) + independent rules-engine cross-check
+  Dockerfile               linux/amd64 container image (built from repo root)
 
 lambdas/
-  common/                  Shared config, AWS client builders, logging, channel senders (WhatsApp/RCS/SMS/SES)
-  webhook_receiver/        Receives WhatsApp/RCS webhook events, fetches media to S3, writes DynamoDB
-  channel_dispatcher/      DynamoDB Stream consumer -> invokes the AgentCore Runtime -> sends
-                            WhatsApp reply + RCS approval card + SES audit email
-  dashboard_api/           Read-only case/stats API for the frontend, plus hospital-scoped
-                            staff signup/login (PBKDF2-hashed passwords) and the onboarding
-                            email template
+  common/                  Shared config, AWS client builders, channel senders (WhatsApp/RCS/SMS/SES),
+                           transcript + patient-directory helpers
+  webhook_receiver/        Receives WhatsApp events from SNS, fetches media to S3, writes DynamoDB
+  channel_dispatcher/      DynamoDB Stream consumer -> invokes the agent -> sends WhatsApp replies,
+                           RCS/WhatsApp doctor cards, and SES payer/audit emails; drives the follow-up flow
+  dashboard_api/           Case/stats API, hospital-scoped staff signup/login, follow-up initiation,
+                           staff messaging, payer-email + transcript exposure, onboarding email
 
-cdk/                       AWS CDK v2 (Python) - StorageStack, MessagingStack, ComputeStack
-  stacks/
-
-frontend/                  React + TypeScript + Vite staff console ("Clinic Command Console")
-  src/views/                 Login, Signup, Analytics (home), Cases, Rule Explorer
-  src/lib/                   api.ts (live/mock data toggle), auth.ts (session), mockData.ts
-
-scripts/                   Local setup/test utilities (see below) - no CDK deploy required to use them
-seed/                      Demo staff account seed data
+cdk/                       AWS CDK v2 (Python) — StorageStack, MessagingStack, ComputeStack (IaC reference)
+frontend/                  React + TypeScript + Vite staff console (deployed on AWS Amplify)
+scripts/                   Idempotent boto3 deploy/setup/test utilities (see below)
+seed/                      Demo payer rules, staff accounts, pharmacies
 ```
-
----
-
-## Two interfaces, two personas
-
-- **Patient → WhatsApp.** No app install. Sends a card photo + voice note, gets status updates and action buttons back in the same chat.
-- **Doctor/clinic approver → RCS action card** (falls back to SMS). Approve/deny buttons for the visit slot.
-- **Clinic staff (front desk, billing, admin) → web console.** Hospital-scoped login (signup collects hospital name/address/email/phone; login uses the generated alphanumeric Hospital ID + username + password), lands on an analytics home page, with case queue and payer rule explorer views.
-
-Email (SES) is **never** sent to patients or payers — it's used only for the two internal/staff-facing flows: the staff onboarding email and the audit report email. See the module docstring in `lambdas/dashboard_api/onboarding_email.py` and `lambdas/channel_dispatcher/handler.py`.
 
 ---
 
 ## Quick start
 
-Prerequisites: Python 3.11+, Node.js 18+, AWS CLI configured.
+Prerequisites: Python 3.11+, Node.js 18+, Docker (for building the agent image), AWS credentials.
 
 ```bash
-# 1. Install backend deps
-python -m venv venv && venv\Scripts\Activate.ps1      # Windows (bash: source venv/bin/activate)
+# 1. Backend deps
+python -m venv venv
+venv\Scripts\Activate.ps1          # Windows (bash: source venv/bin/activate)
 pip install -r requirements.txt
 
 # 2. Configure
-cp .env.example .env     # fill in AWS creds, Bedrock model id, WhatsApp/RCS/SMS/SES identities
+cp .env.example .env               # fill in AWS creds, Bedrock model id, messaging identities, table names
 
-# 3. Frontend
+# 3. Frontend deps
 cd frontend && npm install && npm run build
 ```
 
-### Current deployment status (direct-to-AWS, no `cdk deploy` yet)
-
-**`cdk deploy` is deliberately deferred** (the AgentCore Runtime container build is the one genuinely costed piece). Everything else has already been stood up directly via boto3 scripts in `scripts/`, so the console and the inbound-message plumbing are real and running against AWS today - not mocked.
-
-Run these once, in order, to reproduce the current live environment (each is idempotent - safe to re-run):
+### Try the console with zero AWS setup
 
 ```bash
-# --- Staff console backend ---
-python scripts/setup_auth_infra.py          # StaffUsersTable + verify SES sender identity
-python scripts/setup_case_infra.py          # PriorAuthTable + PayerRulesTable
-python scripts/seed_payer_rules.py          # seed/payer_rules.json -> PayerRulesTable
-python scripts/seed_prior_auth_cases.py     # seed/prior_auth_cases.json -> PriorAuthTable (demo cases)
-python scripts/seed_staff_users.py          # seed/staff_users.json -> StaffUsersTable (demo logins)
-python scripts/deploy_dashboard_api.py      # Lambda: CareRelay-DashboardApi
-python scripts/deploy_api_gateway.py        # API Gateway REST API in front of it (prints the base URL)
-
-# --- Inbound WhatsApp intake pipeline ---
-python scripts/setup_intake_infra.py        # IntakeEventsTable (streamed) + PatientsTable
-python scripts/setup_sns_topic.py           # CareRelay-InboundTopic SNS topic
-python scripts/deploy_webhook_receiver.py   # Lambda: CareRelay-WebhookReceiver
-python scripts/deploy_channel_dispatcher.py # Lambda: CareRelay-ChannelDispatcher + DynamoDB Stream trigger
-python scripts/subscribe_webhook_to_sns.py  # subscribes WebhookReceiver to the SNS topic
+cd frontend && npm run dev
 ```
 
-After this, the frontend's live API base (`frontend/src/lib/api.ts:LIVE_API_BASE_DEFAULT`) points at the deployed API Gateway URL automatically - no manual config needed to demo the console.
+Open `http://localhost:5173`. The app ships with realistic mock data covering every case outcome, so it's fully explorable out of the box.
 
-**What is proven working right now** (verified with real AWS calls, not just code review):
-- Console: signup/login, case list/detail/create, status updates with a timestamped activity log, payer rule authoring - all backed by real DynamoDB, over a real API Gateway endpoint.
-- Inbound pipeline: a simulated WhatsApp-shaped message published to the SNS topic is correctly received by `webhook_receiver`, written to `IntakeEventsTable`, and triggers `channel_dispatcher` via the DynamoDB Stream - confirmed via CloudWatch Logs showing the full chain executing.
-
-**What is NOT yet live** (the two pieces genuinely gated on cost/manual setup):
-1. **Amazon Bedrock AgentCore Runtime** (the Strands agent container) - not deployed, since this is the `cdk deploy` step being deferred. `channel_dispatcher` already handles this gracefully: with `AGENT_RUNTIME_ARN` unset, it logs `agent.invoke.skipped.no_runtime_arn` and exits cleanly instead of erroring. Deploy with `cdk deploy --all` (see `cdk/stacks/compute_stack.py`) when ready, then set `AGENT_RUNTIME_ARN` in `.env` and re-run `scripts/deploy_channel_dispatcher.py`.
-2. **A real WhatsApp Business Account (WABA) linked via AWS End User Messaging Social.** This is a manual, console-driven step that cannot be scripted - it requires a Meta Business account, phone number verification, and an AWS-side linking flow. Until this is done, the SNS topic has no real inbound traffic (only the simulated test message used for verification above). To complete it:
-   - In the AWS console, go to **AWS End User Messaging Social** → link/onboard a WhatsApp Business Account.
-   - Under that WABA's settings, add a **message and event destination** pointing at the SNS topic ARN printed by `scripts/setup_sns_topic.py` (`arn:aws:sns:<region>:<account>:CareRelay-InboundTopic`).
-   - See AWS's own guide: ["Add a message and event destination to AWS End User Messaging Social"](https://docs.aws.amazon.com/social-messaging/latest/userguide/managing-event-destinations-add.html).
-
-### Local pipeline test (no AWS deploy needed at all)
+### Run the agent pipeline locally (no deploy)
 
 ```bash
 python scripts/local_pipeline_test.py
 ```
 
-Runs the full agent pipeline (Strands supervisor + rules engine) against a sample case entirely locally.
+Runs the full Strands supervisor + rules engine against a sample case entirely on your machine.
 
 ---
 
-## Security notes
+## Deploying to AWS
 
-- Staff passwords are hashed with PBKDF2-HMAC-SHA256 (260,000 iterations), never stored in plaintext.
-- The dashboard API is unauthenticated-by-default for demo convenience, including the staff-initiated write routes (`POST /cases`, `PATCH /cases/{id}/status`, `POST /payer-rules`) — see the security note in `lambdas/dashboard_api/handler.py`. Add a Cognito/Lambda authorizer before any real deployment; until then, the `actor` field on activity log entries is self-reported by the client, not a verified identity.
-- `patient_phone_masked` is pre-masked at write time; the dashboard API never returns a raw phone number.
-- Audit report emails are signed with an asymmetric KMS key (RSASSA_PKCS1_V1_5_SHA_256) so recipients can verify the report wasn't altered.
-- Multi-tenancy is currently scoped to staff auth only (signup/login are hospital-scoped via a composite `(hospital_id, username)` key). Case data is not yet filtered per hospital — documented explicitly in code comments rather than left as an unstated gap.
+All deploy scripts are idempotent (safe to re-run) and live in `scripts/`. They provision resources directly via boto3.
+
+```bash
+# --- Data stores ---
+python scripts/setup_auth_infra.py          # StaffUsersTable + SES sender identity
+python scripts/setup_case_infra.py          # PriorAuthTable + PayerRulesTable
+python scripts/setup_intake_infra.py        # IntakeEventsTable (streamed) + PatientsTable
+python scripts/setup_appointments_infra.py  # AppointmentsTable
+python scripts/seed_payer_rules.py          # seed payer/CPT coverage rules
+python scripts/seed_staff_users.py          # seed demo staff logins
+
+# --- Dashboard API + console backend ---
+python scripts/deploy_dashboard_api.py      # Lambda: CareRelay-DashboardApi
+python scripts/deploy_api_gateway.py        # API Gateway REST API (prints the base URL)
+
+# --- Inbound WhatsApp pipeline ---
+python scripts/setup_sns_topic.py           # CareRelay-InboundTopic
+python scripts/deploy_webhook_receiver.py   # Lambda: CareRelay-WebhookReceiver
+python scripts/subscribe_webhook_to_sns.py  # subscribe the webhook to the topic
+
+# --- The Strands agent (container) ---
+python scripts/push_agent_ecr.py            # build + push the agent image to Amazon ECR
+python scripts/deploy_app_runner.py         # run the agent on AWS App Runner, inject config, print URL
+python scripts/deploy_channel_dispatcher.py # Lambda: CareRelay-ChannelDispatcher (calls the agent)
+
+# --- Staff web console ---
+python scripts/deploy_frontend.py           # build + deploy the React console to AWS Amplify (prints URL)
+```
+
+**Linking a WhatsApp Business Account** is a one-time console step (it requires a Meta Business account and phone-number verification, which can't be scripted): in **AWS End User Messaging Social**, onboard a WhatsApp Business Account and add a **message and event destination** pointing at the `CareRelay-InboundTopic` SNS ARN. After that, real inbound WhatsApp messages flow through the pipeline automatically.
+
+> The agent container is both **App Runner-ready** and **Bedrock AgentCore Runtime-ready** — the same image exposes the `/ping` and `/invocations` contract. `channel_dispatcher` calls the App Runner URL by default (`AGENT_RUNNER_URL`) and will use a Bedrock AgentCore Runtime ARN (`AGENT_RUNTIME_ARN`) instead if one is set, with no code changes.
+
+---
+
+## Security
+
+- Staff passwords are hashed with **PBKDF2-HMAC-SHA256** (260,000 iterations); plaintext is never stored.
+- Patient phone numbers are **pre-masked at write time**; the dashboard API never returns a raw number. The raw number is stored write-only, solely so staff can reply over WhatsApp.
+- Audit report emails are **signed with an asymmetric AWS KMS key** (RSASSA_PKCS1_V1_5_SHA_256) so recipients can verify a report wasn't altered (enabled when a signing key is configured).
+- External content (messages, media, web results) is treated as untrusted input; the agent's output is independently cross-checked against the deterministic rules engine before it's acted on.
+- The demo dashboard API is unauthenticated for convenience — add a Cognito/Lambda authorizer before any production use. This is documented in-code rather than left as an unstated gap.
 
 ---
 

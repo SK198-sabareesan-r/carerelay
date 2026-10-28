@@ -305,11 +305,19 @@ def send_sms(to: str, text: str) -> Optional[str]:
 # WhatsApp media -> S3
 # --------------------------------------------------------------------------- #
 def fetch_whatsapp_media_to_s3(media_id: str, origination_phone_number_id: str, s3_key: str) -> str:
-    """Pull a WhatsApp media file (insurance card photo / voice note) into S3."""
+    """Pull a WhatsApp media file (insurance card photo / voice note) into S3.
+
+    get_whatsapp_message_media's originationPhoneNumberId has the SAME
+    requirement as send: it must be AWS's own phone-number-id, not Meta's
+    numeric ID that inbound events carry. Without this translation the call
+    fails with a ValidationException and the media never lands in S3 - which
+    makes the dispatcher think the card/voice never arrived and re-request
+    it forever."""
+    resolved_id = _resolve_aws_phone_number_id(origination_phone_number_id)
     client = aws_clients.social_messaging()
     client.get_whatsapp_message_media(
         mediaId=media_id,
-        originationPhoneNumberId=origination_phone_number_id,
+        originationPhoneNumberId=resolved_id,
         destinationS3File={"bucketName": config.MEDIA_BUCKET, "key": s3_key},
     )
     log_event(logger, "info", "media.fetch.ok", s3_key=s3_key)

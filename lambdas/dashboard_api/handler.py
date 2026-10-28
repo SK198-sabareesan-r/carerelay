@@ -176,7 +176,8 @@ _VALID_STATUSES = {
     # Follow-up flow lifecycle states.
     "AWAITING_INSURANCE_DOCS",   # insured: waiting for card photo + voice note
     "AWAITING_VOICE_NOTE",       # self-pay: waiting for voice note
-    "PENDING_DOCTOR_APPROVAL",   # self-pay: voice received, awaiting doctor's tap
+    "AWAITING_PAYER",            # insured: prior-auth emailed, awaiting payer confirmation
+    "PENDING_DOCTOR_APPROVAL",   # voice/payer cleared, awaiting doctor's tap
     "SCHEDULED",                 # appointment date/time released to the patient
 }
 
@@ -524,7 +525,8 @@ def _handle_start_followup(body: Dict[str, Any]):
             f"Hello {patient_name.split(' ')[0]}, this is {hospital_name or 'your clinic'}. "
             "Your doctor has recommended a follow-up procedure. To process your insurance "
             "coverage, please reply with:\n"
-            "- A clear photo of your insurance card (front side)\n"
+            "- A clear photo of the FRONT of your insurance card\n"
+            "- A clear photo of the BACK of your insurance card\n"
             "- A short voice note describing your symptoms / reason for the visit"
         )
     else:
@@ -645,8 +647,93 @@ def _handle_update_status(case_id: str, body: Dict[str, Any]):
     _append_activity(case_id, "STATUS_CHANGED", f"staff:{actor}", detail)
     log_event(logger, "info", "case.status_changed", case_id=case_id, old=old_status, new=new_status)
 
+    # Doctor-card dispatch gate: when staff set a case to
+    # PENDING_DOCTOR_APPROVAL, the backend sends the doctor approval card
+    # over WhatsApp to the configured approver number. (Staff set this after
+    # the payer confirms coverage - the order stays: docs -> payer email ->
+    # payer confirms -> staff set PENDING_DOCTOR_APPROVAL -> doctor card ->
+    # doctor approves -> staff message patient the time.) Only dispatch when
+    # actually TRANSITIONING into this state, so re-saving the same status
+    # doesn't re-send the card.
+    if new_status == "PENDING_DOCTOR_APPROVAL" and old_status != "PENDING_DOCTOR_APPROVAL":
+        try:
+            # If coming from the payer wait, record the payer's confirmation.
+            if old_status == "AWAITING_PAYER":
+                _record_payer_confirmation(case_id, item, actor)
+            _dispatch_doctor_card_for_case(case_id, item)
+            _append_activity(case_id, "DOCTOR_CARD_SENT", "system",
+                             "Doctor approval card dispatched over WhatsApp to the clinic approver.")
+            log_event(logger, "info", "doctor_card.dispatched", case_id=case_id)
+        except Exception as exc:  # noqa: BLE001 - never fail the status update over dispatch
+            log_event(logger, "warning", "doctor_card.dispatch_failed", case_id=case_id, error=str(exc))
+
     updated = _get_case(case_id)
     return _respond(200, {"case": _present(updated, detail=True)})
+
+
+def _record_payer_confirmation(case_id: str, item: Dict[str, Any], actor: str) -> None:
+    """Append the payer's inbound confirmation to the case's payer_emails
+    correspondence log, so the console's Payer-emails tab shows the full
+    request -> approval exchange."""
+    import time as _time
+
+    card = item.get("extracted_card", {}) or {}
+    clinic = item.get("hospital_name") or "the clinic"
+    payer_label = card.get("payer_name") or item.get("payer_id") or "the payer"
+    entry = {
+        "direction": "inbound",
+        "subject": f"RE: Prior Authorization Request - {item.get('procedure_name', 'procedure')}",
+        "from_addr": os.environ.get("PAYER_PRIOR_AUTH_INBOX", "intake@payer.example.com"),
+        "to_addr": config.SES_SENDER or "clinic@carerelay",
+        "from_label": payer_label,
+        "to_label": clinic,
+        "body": ("Prior authorization APPROVED for the requested procedure. "
+                 "Coverage confirmed; please proceed. Authorization on file with the payer."),
+        "message_id": None,
+        "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+    }
+    _cases_table().update_item(
+        Key={"case_id": case_id},
+        UpdateExpression="SET payer_emails = list_append(if_not_exists(payer_emails, :e), :entry)",
+        ExpressionAttributeValues={":e": [], ":entry": [entry]},
+    )
+
+
+def _dispatch_doctor_card_for_case(case_id: str, item: Dict[str, Any]) -> None:
+    """Send the doctor approval card (drafted by the agent and stored on the
+    case) to the clinic approver(s) over WhatsApp/RCS. Called only after the
+    payer has confirmed (status -> APPROVED)."""
+    from common import channels
+
+    messages = item.get("messages", {}) or {}
+    body = messages.get("doctor_card_body")
+    buttons = messages.get("doctor_card_buttons") or [
+        {"id": "approve_slot", "title": "Approve Visit"},
+        {"id": "request_notes", "title": "Request Notes"},
+    ]
+    if not body:
+        # Build a minimal card from the case if the agent didn't draft one.
+        card = item.get("extracted_card", {}) or {}
+        v = item.get("verification", {}) or {}
+        lines = [f"Patient: {item.get('patient_name', 'Patient')}"]
+        if item.get("perceived_facts"):
+            lines.append(f"Reported symptoms: {item['perceived_facts'][0]}")
+        lines.append(f"Procedure: {item.get('procedure_name', '')} (CPT {item.get('cpt_code', '')})")
+        lines.append(f"Insurer: {card.get('payer_name', 'n/a')} | Member ID: {card.get('member_id', 'n/a')}")
+        lines.append("Insurance: APPROVED by payer. Awaiting your sign-off to confirm the visit.")
+        if v.get("matched_rule_id"):
+            lines.append(f"Matched rule: {v.get('matched_rule_id')}")
+        body = "\n".join(lines)
+
+    approvers = config.clinic_approver_numbers()
+    for approver in approvers:
+        try:
+            msg = channels.build_whatsapp_buttons(to=approver, body=body, buttons=buttons,
+                                                  header="Clinical Approval")
+            channels.send_whatsapp(msg, config.WHATSAPP_PHONE_NUMBER_ID)
+            log_event(logger, "info", "doctor_card.sent", case_id=case_id, to_masked=f"***{approver[-4:]}")
+        except Exception as exc:  # noqa: BLE001
+            log_event(logger, "warning", "doctor_card.send_failed", case_id=case_id, error=str(exc))
 
 
 def _handle_send_message(case_id: str, body: Dict[str, Any]):
@@ -702,6 +789,24 @@ def _handle_send_message(case_id: str, body: Dict[str, Any]):
                           kind="text", actor=f"staff:{actor}")
     except Exception as exc:  # noqa: BLE001
         log_event(logger, "warning", "staff_message.transcript_failed", case_id=case_id, error=str(exc))
+
+    # If the doctor has APPROVED the visit, the staff message to the patient
+    # IS the appointment confirmation - so sending it now releases the
+    # appointment and moves the case to SCHEDULED. This is the human-in-the-
+    # loop final step: the doctor signs off, then staff personally message
+    # the patient the timing from the console, which confirms the booking.
+    if item.get("status") == "APPROVED":
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _cases_table().update_item(
+            Key={"case_id": case_id},
+            UpdateExpression="SET #s = :s, appointment_released = :r",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "SCHEDULED", ":r": True},
+        )
+        _append_activity(case_id, "APPOINTMENT_RELEASED", f"staff:{actor}",
+                         "Staff sent the appointment time to the patient; booking confirmed.")
+        log_event(logger, "info", "appointment.released.by_staff", case_id=case_id)
+
     log_event(logger, "info", "staff_message.sent", case_id=case_id, actor=actor, message_id=message_id)
 
     updated = _get_case(case_id)

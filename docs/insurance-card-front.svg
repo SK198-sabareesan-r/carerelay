@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1012 638" font-family="'Segoe UI',Arial,sans-serif">
+  <defs>
+    <linearGradient id="cardbg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b4f8a"/>
+      <stop offset="0.55" stop-color="#1368b8"/>
+      <stop offset="1" stop-color="#1e88e5"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4d784"/>
+      <stop offset="1" stop-color="#c9a24a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Card body -->
+  <rect x="6" y="6" width="1000" height="626" rx="36" fill="url(#cardbg)"/>
+  <rect x="6" y="6" width="1000" height="626" rx="36" fill="url(#sheen)"/>
+  <rect x="6" y="6" width="1000" height="626" rx="36" fill="none" stroke="#ffffff" stroke-opacity="0.25" stroke-width="2"/>
+
+  <!-- decorative arcs -->
+  <circle cx="900" cy="120" r="220" fill="#ffffff" opacity="0.06"/>
+  <circle cx="820" cy="560" r="160" fill="#ffffff" opacity="0.05"/>
+
+  <!-- Header: logo + plan -->
+  <g transform="translate(48,46)">
+    <circle cx="26" cy="26" r="26" fill="#ffffff"/>
+    <path d="M26 12 l0 28 M12 26 l28 0" stroke="#1368b8" stroke-width="7" stroke-linecap="round"/>
+    <text x="70" y="22" font-size="30" font-weight="800" fill="#ffffff">ACME Health</text>
+    <text x="70" y="48" font-size="16" fill="#cfe4fb" letter-spacing="2">PREFERRED PPO &#183; MEMBER ID CARD</text>
+  </g>
+
+  <text x="964" y="70" text-anchor="end" font-size="16" font-weight="700" fill="#cfe4fb">GROUP PLAN</text>
+
+  <!-- EMV chip -->
+  <rect x="60" y="150" width="86" height="64" rx="10" fill="url(#chip)"/>
+  <path d="M60 182 h86 M103 150 v64" stroke="#8a6d2a" stroke-width="2" opacity="0.6"/>
+
+  <!-- Member details -->
+  <g transform="translate(60,268)" fill="#ffffff">
+    <text x="0" y="0" font-size="15" letter-spacing="2" fill="#bcd9f6">MEMBER NAME</text>
+    <text x="0" y="34" font-size="30" font-weight="700">JOHN A. CARTER</text>
+
+    <text x="0" y="92" font-size="15" letter-spacing="2" fill="#bcd9f6">MEMBER ID</text>
+    <text x="0" y="126" font-size="30" font-weight="700" font-family="Consolas,Menlo,monospace">ACM-83920145</text>
+
+    <text x="470" y="92" font-size="15" letter-spacing="2" fill="#bcd9f6">GROUP NUMBER</text>
+    <text x="470" y="126" font-size="30" font-weight="700" font-family="Consolas,Menlo,monospace">GRP-4471</text>
+
+    <text x="0" y="184" font-size="15" letter-spacing="2" fill="#bcd9f6">PLAN</text>
+    <text x="0" y="214" font-size="24" font-weight="600">Preferred PPO</text>
+
+    <text x="470" y="184" font-size="15" letter-spacing="2" fill="#bcd9f6">EFFECTIVE</text>
+    <text x="470" y="214" font-size="24" font-weight="600">01 / 2026</text>
+
+    <text x="740" y="184" font-size="15" letter-spacing="2" fill="#bcd9f6">PAYER ID</text>
+    <text x="740" y="214" font-size="24" font-weight="700" font-family="Consolas,Menlo,monospace">60054</text>
+  </g>
+
+  <!-- footer -->
+  <text x="60" y="590" font-size="15" fill="#cfe4fb">RxBIN 004336 &#183; RxPCN ADV &#183; RxGRP RX4471</text>
+  <text x="964" y="590" text-anchor="end" font-size="15" fill="#cfe4fb">Member Services 1-800-ACME-HLP</text>
+</svg>

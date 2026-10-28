@@ -91,6 +91,10 @@ SMS_ORIGINATION_NUMBER = _get("SMS_ORIGINATION_NUMBER", "")
 
 
 def clinic_approver_numbers() -> list:
+    """Doctor/approver WhatsApp number(s) the approval card is sent to.
+    Read ONLY from the CLINIC_APPROVER_NUMBERS env var (comma-separated,
+    E.164 with country code) - no hardcoded fallback, so the number is
+    controlled entirely from .env / the Lambda env."""
     raw = _get("CLINIC_APPROVER_NUMBERS", "")
     return [r.strip() for r in raw.split(",") if r.strip()]
 
@@ -116,6 +120,24 @@ def resolve_ses_recipients(intended: list) -> list:
     return intended
 
 
+def ses_from(display_name: str = "") -> str:
+    """Build the SES 'From' header so emails show a friendly sender NAME to
+    the recipient - the HOSPITAL's name per case, not a generic one - while
+    still sending from the verified SES_SENDER address. e.g.
+        ses_from("Sunrise General Hospital")
+        -> 'Sunrise General Hospital <sender@domain>'
+    Falls back to the bare address if no name is given or no sender is set.
+    The display name is sanitized of characters that would break the header."""
+    if not SES_SENDER:
+        return SES_SENDER
+    name = (display_name or "").strip()
+    if not name:
+        return SES_SENDER
+    # Strip quotes / angle brackets / newlines that could corrupt the header.
+    safe = name.replace('"', "").replace("<", "").replace(">", "").replace("\n", " ").replace("\r", " ")
+    return f'"{safe}" <{SES_SENDER}>'
+
+
 def ses_command_recipients() -> list:
     raw = _get("SES_COMMAND_RECIPIENTS", "")
     return [r.strip() for r in raw.split(",") if r.strip()]
@@ -126,6 +148,13 @@ KMS_SIGNING_KEY_ID = _get("KMS_SIGNING_KEY_ID", "")
 
 # --- Amazon Bedrock AgentCore Runtime (the Strands agent backend) ---
 AGENT_RUNTIME_ARN = _get("AGENT_RUNTIME_ARN", "")
+
+# --- AWS App Runner agent endpoint (primary agent host) ---------------
+# The CareRelay Strands agent runs as a container on AWS App Runner. This is
+# its service URL (e.g. https://xxxx.ap-south-1.awsapprunner.com). When set,
+# channel_dispatcher POSTs case payloads to <url>/invocations instead of
+# invoking Bedrock AgentCore Runtime. Set by scripts/deploy_app_runner.py.
+AGENT_RUNNER_URL = _get("AGENT_RUNNER_URL", "")
 
 # --- Behavior ---
 INTAKE_BATCH_WINDOW_SECONDS = int(_get("INTAKE_BATCH_WINDOW_SECONDS", "15"))

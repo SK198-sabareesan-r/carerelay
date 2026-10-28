@@ -76,7 +76,15 @@ export function CaseDetailView() {
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="flex items-center gap-2">
-            <OutcomeBadge outcome={c.verification.outcome} />
+            {/* The coverage OUTCOME badge (e.g. "Missing documents") is only
+                meaningful during verification. Once the case has advanced
+                past the payer step, the live StatusBadge is the single source
+                of truth - showing the stale INCOMPLETE_INFO outcome alongside
+                an APPROVED status is contradictory, so hide it then. */}
+            {c.verification?.outcome &&
+              !["AWAITING_PAYER", "APPROVED", "PENDING_DOCTOR_APPROVAL", "SCHEDULED", "DENIED"].includes(c.status) && (
+                <OutcomeBadge outcome={c.verification.outcome} />
+              )}
             <StatusBadge status={c.status} />
           </div>
           <StatusUpdateControl
@@ -95,16 +103,24 @@ export function CaseDetailView() {
           <span className="text-ink-600">
             Appointment: <strong className="text-ink-900">{c.appointment_datetime}</strong>
           </span>
-          <span
-            className={
-              "rounded-full px-2.5 py-0.5 text-[11px] font-semibold " +
-              (c.appointment_released
-                ? "bg-brand-100 text-brand-800"
-                : "bg-amber-100 text-amber-800")
-            }
-          >
-            {c.appointment_released ? "Released to patient" : "Withheld until cleared"}
-          </span>
+          {(() => {
+            // ONE status chip, driven by the case's current status (the single
+            // source of truth), so it moves through the lifecycle as staff /
+            // the doctor act - never a stale "Withheld" after the card is out.
+            const released = c.appointment_released || c.status === "SCHEDULED";
+            const stage: Record<string, [string, string]> = {
+              AWAITING_INSURANCE_DOCS: ["Awaiting patient documents", "bg-amber-100 text-amber-800"],
+              AWAITING_VOICE_NOTE: ["Awaiting patient voice note", "bg-amber-100 text-amber-800"],
+              AWAITING_PAYER: ["Awaiting payer confirmation", "bg-violet-100 text-violet-800"],
+              PENDING_DOCTOR_APPROVAL: ["With doctor for approval", "bg-sky-100 text-sky-800"],
+              SCHEDULED: ["Confirmed to patient", "bg-brand-100 text-brand-800"],
+              APPROVED: ["Payer approved - with doctor", "bg-sky-100 text-sky-800"],
+            };
+            const [label, cls] = released
+              ? ["Confirmed to patient", "bg-brand-100 text-brand-800"]
+              : stage[c.status] || ["Withheld until cleared", "bg-amber-100 text-amber-800"];
+            return <span className={"rounded-full px-2.5 py-0.5 text-[11px] font-semibold " + cls}>{label}</span>;
+          })()}
         </div>
       )}
 
@@ -134,9 +150,10 @@ export function CaseDetailView() {
                   messages={c.messages}
                   transcript={c.transcript}
                   patientName={c.patient_name}
+                  hospitalName={c.hospital_name}
                 />
                 <MessageComposer caseId={c.case_id} canMessage={c.can_message_patient} />
-                {c.messages.doctor_card_body && (
+                {c.messages?.doctor_card_body && (
                   <div>
                     <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
                       Doctor approval card
@@ -157,7 +174,7 @@ export function CaseDetailView() {
                   </h4>
                   <ActivityLog entries={c.activity_log} />
                 </div>
-                {c.messages.audit_headline && (
+                {c.messages?.audit_headline && (
                   <div>
                     <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">
                       Audit email
@@ -172,12 +189,13 @@ export function CaseDetailView() {
 
         <div className="space-y-4">
           <RuleCitationCard
-            matchedRuleId={c.verification.matched_rule_id}
-            rationale={c.verification.rationale}
-            missingDocs={c.verification.missing_documents}
+            matchedRuleId={c.verification?.matched_rule_id}
+            rationale={c.verification?.rationale}
+            missingDocs={c.verification?.missing_documents}
+            status={c.status}
           />
           <ExtractedCardPanel card={c.extracted_card} />
-          {c.verification.outcome === "PRIOR_AUTH_REQUIRED" && (
+          {c.verification?.outcome === "PRIOR_AUTH_REQUIRED" && (
             <PayerContactCard
               approvalCode={c.verification.approval_code}
               eligible={c.verification.payer_eligible}
@@ -193,11 +211,24 @@ function RuleCitationCard({
   matchedRuleId,
   rationale,
   missingDocs,
+  status,
 }: {
   matchedRuleId?: string | null;
-  rationale: string;
-  missingDocs: string[];
+  rationale?: string | null;
+  missingDocs?: string[] | null;
+  status?: string;
 }) {
+  const docs = missingDocs ?? [];
+  const hasVerification = !!(rationale || matchedRuleId);
+  // Once the case has moved past verification (payer confirmed / with the
+  // doctor / scheduled), the "missing documents" pills are stale - the payer
+  // handles those during their review. Only show them while we're still
+  // verifying. This keeps a SINGLE, stage-accurate status, not a permanent
+  // "missing documents" flag.
+  const preClearance = !status || ["AWAITING_INSURANCE_DOCS", "AWAITING_VOICE_NOTE",
+    "AWAITING_DOCUMENTS", "OPEN", "AWAITING_PAYER"].includes(status);
+  const showDocs = docs.length > 0 && preClearance;
+  const cleared = ["APPROVED", "PENDING_DOCTOR_APPROVAL", "SCHEDULED"].includes(status || "");
   return (
     <div className="relative overflow-hidden rounded-2xl shadow-raised">
       <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-brand-300/30 blur-2xl" />
@@ -208,17 +239,31 @@ function RuleCitationCard({
         <span className="font-mono text-xs text-brand-50">{matchedRuleId ?? "no matching rule"}</span>
       </div>
       <div className="relative bg-white px-4 py-3.5">
-        <p className="ledger-line text-ink-700">{rationale}</p>
-        {missingDocs.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {missingDocs.map((d) => (
-              <span
-                key={d}
-                className="pill-3d rounded-md bg-gradient-to-b from-orange-50 to-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-800"
-              >
-                {d.replace(/_/g, " ")}
-              </span>
-            ))}
+        <p className="ledger-line text-ink-700">
+          {hasVerification
+            ? rationale
+            : "Coverage not yet evaluated — waiting on the patient's insurance card and voice note."}
+        </p>
+        {showDocs && (
+          <div className="mt-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+              Documents the payer will review
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {docs.map((d) => (
+                <span
+                  key={d}
+                  className="pill-3d rounded-md bg-gradient-to-b from-orange-50 to-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-800"
+                >
+                  {d.replace(/_/g, " ")}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {cleared && (
+          <div className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-brand-50 px-2.5 py-1 text-[11px] font-semibold text-brand-700 ring-1 ring-inset ring-brand-200">
+            Coverage confirmed by payer
           </div>
         )}
       </div>

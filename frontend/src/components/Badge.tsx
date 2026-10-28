@@ -8,6 +8,7 @@ const STATUS_STYLES: Record<CaseStatus, string> = {
   AWAITING_DOCUMENTS: "bg-gradient-to-b from-amber-50 to-amber-100 text-amber-800",
   AWAITING_INSURANCE_DOCS: "bg-gradient-to-b from-amber-50 to-amber-100 text-amber-800",
   AWAITING_VOICE_NOTE: "bg-gradient-to-b from-amber-50 to-amber-100 text-amber-800",
+  AWAITING_PAYER: "bg-gradient-to-b from-violet-50 to-violet-100 text-violet-800",
   PENDING_DOCTOR_APPROVAL: "bg-gradient-to-b from-sky-50 to-sky-100 text-sky-800",
   SCHEDULED: "bg-gradient-to-b from-brand-50 to-brand-100 text-brand-800",
 };

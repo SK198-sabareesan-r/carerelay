@@ -197,15 +197,25 @@ def _maybe_send_acknowledgment(m: InboundIntakeMessage) -> None:
 def _enrich_and_store(m: InboundIntakeMessage) -> None:
     s3_media_key = None
     if m.kind in (KIND_IMAGE, KIND_AUDIO) and m.media_id:
-        ext = _ext_for_mime(m.media_mime, m.kind)
         kind_label = "card" if m.kind == KIND_IMAGE else "voice"
-        s3_media_key = f"intake/{m.sender}/{m.message_id}-{kind_label}{ext}"
+        # AWS End User Messaging's GetWhatsAppMessageMedia treats the key we
+        # pass as a PREFIX and appends the media's own id + native extension
+        # (e.g. we asked for "...-card.jpg" and it wrote
+        # "...-card.jpg2319...jpeg"). Relying on the requested key therefore
+        # gives a NoSuchKey when the agent later reads it. So we use a clean
+        # per-media PREFIX (ending in "/"), let AWS write whatever filename
+        # under it, then list the prefix to discover the REAL key and store
+        # that - the key that actually exists in S3.
+        prefix = f"intake/{m.sender}/{m.message_id}-{kind_label}/"
         try:
             channels.fetch_whatsapp_media_to_s3(
                 media_id=m.media_id,
                 origination_phone_number_id=m.phone_number_id,
-                s3_key=s3_media_key,
+                s3_key=prefix,
             )
+            s3_media_key = _resolve_written_key(prefix)
+            if not s3_media_key:
+                log_event(logger, "warning", "media.key.not_found", prefix=prefix)
         except Exception as exc:  # noqa: BLE001 - media fetch best-effort
             log_event(logger, "warning", "media.fetch.failed", error=str(exc))
             s3_media_key = None
@@ -224,6 +234,20 @@ def _enrich_and_store(m: InboundIntakeMessage) -> None:
         channel=m.channel,
         has_media=bool(s3_media_key),
     )
+
+
+def _resolve_written_key(prefix: str) -> str:
+    """After GetWhatsAppMessageMedia writes under `prefix`, list it and
+    return the single object's real key (the name AWS actually chose). Falls
+    back to '' if nothing landed."""
+    s3 = aws_clients.s3()
+    resp = s3.list_objects_v2(Bucket=config.MEDIA_BUCKET, Prefix=prefix, MaxKeys=5)
+    contents = resp.get("Contents", [])
+    if not contents:
+        return ""
+    # Newest first in case a retry wrote more than one; take the latest.
+    contents.sort(key=lambda o: o.get("LastModified"), reverse=True)
+    return contents[0]["Key"]
 
 
 def _ext_for_mime(mime, kind) -> str:

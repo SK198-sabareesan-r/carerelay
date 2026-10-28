@@ -39,6 +39,7 @@ const STATUS_STAGES: { label: string; statuses: string[]; color: [string, string
     statuses: ["AWAITING_INSURANCE_DOCS", "AWAITING_VOICE_NOTE", "AWAITING_DOCUMENTS", "OPEN"],
     color: ["#fbbf24", "#b45309"],
   },
+  { label: "Awaiting payer", statuses: ["AWAITING_PAYER"], color: ["#a78bfa", "#6d28d9"] },
   { label: "Pending approval", statuses: ["PENDING_DOCTOR_APPROVAL"], color: ["#38bdf8", "#0369a1"] },
   { label: "Scheduled", statuses: ["SCHEDULED", "APPROVED"], color: ["#34d399", "#0f766e"] },
   { label: "Denied", statuses: ["DENIED"], color: ["#fb7185", "#9f1239"] },

@@ -97,10 +97,40 @@ _FALLBACK_RULES: List[Dict[str, Any]] = [
 ]
 
 
+# Maps the payer NAME printed on an insurance card (as the vision model
+# extracts it) + common payer-id variants to the canonical payer_id used in
+# the rules catalog. Matching is case-insensitive and substring-based, so
+# "ACME Health", "ACME Health and Allied Insurance", "ACME" all resolve to
+# PAYER-ACME. This keeps payer resolution DETERMINISTIC (code, not the LLM):
+# the agent passes whatever it read, and the rules engine normalizes it here.
+_PAYER_NAME_ALIASES: List[tuple] = [
+    ("acme", "PAYER-ACME"),
+    ("60054", "PAYER-ACME"),          # ACME EDI payer id
+    ("globalhealth", "PAYER-GLOBALHEALTH"),
+    ("global health", "PAYER-GLOBALHEALTH"),
+]
+
+
+def _canonical_payer_id(payer_id: str) -> str:
+    """Normalize a payer name / id variant to a canonical catalog payer_id.
+    Already-canonical ids (PAYER-*) pass through unchanged."""
+    if not payer_id:
+        return payer_id
+    raw = payer_id.strip()
+    if raw.upper().startswith("PAYER-"):
+        return raw.upper()
+    low = raw.lower()
+    for needle, canonical in _PAYER_NAME_ALIASES:
+        if needle in low:
+            return canonical
+    return raw
+
+
 def _lookup_rule(payer_id: str, cpt_code: str, rules: Optional[List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
     source = rules if rules is not None else _FALLBACK_RULES
+    canonical = _canonical_payer_id(payer_id)
     for rule in source:
-        if rule.get("payer_id") == payer_id and rule.get("cpt_code") == cpt_code:
+        if rule.get("payer_id") == canonical and rule.get("cpt_code") == cpt_code:
             return rule
     return None
 
@@ -126,6 +156,9 @@ def evaluate(
         RuleDecision - a fully deterministic result. No model is invoked.
     """
     documents_on_file = documents_on_file or []
+    # Normalize the payer (card name / variant -> canonical catalog id) so
+    # the decision, UI, and payer email all show a consistent payer_id.
+    payer_id = _canonical_payer_id(payer_id)
     rule = _lookup_rule(payer_id, cpt_code, rules)
 
     if rule is None:

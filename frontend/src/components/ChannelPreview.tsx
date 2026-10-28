@@ -83,16 +83,34 @@ function Bubble({ msg }: { msg: TranscriptMessage }) {
  * parent (CaseDetailView) refetches on an interval, so new messages appear
  * without a manual reload.
  */
+/** Derive up-to-2-letter initials from a hospital name, e.g.
+ *  "Sunrise General Hospital" -> "SG", "Metro" -> "ME". */
+function initialsOf(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "CR";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return (words[0][0] + words[1][0]).toUpperCase();
+}
+
 export function WhatsAppPreview({
   messages,
   transcript,
   patientName,
+  hospitalName,
 }: {
   messages: DraftedMessages;
   transcript?: TranscriptMessage[];
   patientName?: string;
+  hospitalName?: string | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The WhatsApp sender shown to the patient is the HOSPITAL (the business
+  // they're dealing with), resolved per case. On a shared business number
+  // the platform-level WhatsApp display name is fixed by Meta, but the
+  // hospital identity is what the patient sees in the conversation and in
+  // every message body.
+  const senderName = hospitalName || "CareRelay";
+  const senderInitials = initialsOf(senderName);
   const thread: TranscriptMessage[] =
     transcript && transcript.length > 0
       ? transcript
@@ -125,12 +143,12 @@ export function WhatsAppPreview({
               washes out against the light console behind the phone frame. */}
           <div className="flex items-center gap-2.5 bg-[#202c33] px-3.5 py-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 text-xs font-bold text-white shadow-md">
-              CR
+              {senderInitials}
             </div>
             <div className="flex-1">
               <div className="flex items-center gap-1 text-[13px] font-semibold text-white">
-                CareRelay
-                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-[#53bdeb]" fill="currentColor" aria-label="Verified business">
+                {senderName}
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-none text-[#53bdeb]" fill="currentColor" aria-label="Verified business">
                   <path d="M12 2l2.4 1.8 3 .2.9 2.9 2.2 2-1 2.9 1 2.9-2.2 2-.9 2.9-3 .2L12 22l-2.4-1.8-3-.2-.9-2.9-2.2-2 1-2.9-1-2.9 2.2-2 .9-2.9 3-.2L12 2z" />
                   <path d="M10.5 14.2l-2-2-1.2 1.2 3.2 3.2 5.4-5.4-1.2-1.2-4.2 4.2z" fill="#0b141a" />
                 </svg>
@@ -155,7 +173,7 @@ export function WhatsAppPreview({
             )}
 
             {/* Agent-drafted quick-reply buttons attached to the latest outbound message */}
-            {transcript && transcript.length > 0 && messages.patient_message_buttons.length > 0 && (
+            {transcript && transcript.length > 0 && (messages?.patient_message_buttons?.length ?? 0) > 0 && (
               <div className="flex justify-end">
                 <div className="mt-0.5 w-[82%] space-y-[3px]">
                   {messages.patient_message_buttons.map((b) => (
@@ -210,7 +228,7 @@ export function RcsDoctorCardPreview({ messages }: { messages: DraftedMessages }
             {messages.doctor_card_body}
           </pre>
           <div className="mt-3 grid gap-2">
-            {messages.doctor_card_buttons.map((b) => (
+            {(messages.doctor_card_buttons ?? []).map((b) => (
               <button
                 key={b.id}
                 disabled
@@ -324,7 +342,7 @@ export function AuditEmailPreview({ messages }: { messages: DraftedMessages }) {
       </div>
       <div className="px-4 py-3">
         <ul className="space-y-1.5">
-          {messages.audit_detail_lines.map((line, i) => (
+          {(messages.audit_detail_lines ?? []).map((line, i) => (
             <li key={i} className="ledger-line text-ink-700">
               {line}
             </li>

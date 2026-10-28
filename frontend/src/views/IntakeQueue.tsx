@@ -18,7 +18,7 @@ import type { DateRange } from "../lib/api";
  * always equals the number of cases behind its matching filter (no more
  * "Scheduled: 4" up top but 0 cases when you click Scheduled).
  */
-type StageId = "ALL" | "AWAITING_PATIENT" | "PENDING_DOCTOR" | "SCHEDULED" | "DENIED";
+type StageId = "ALL" | "AWAITING_PATIENT" | "AWAITING_PAYER" | "PENDING_DOCTOR" | "SCHEDULED" | "DENIED";
 
 const STAGES: { id: StageId; label: string; statuses: CaseStatus[] }[] = [
   { id: "ALL", label: "All", statuses: [] },
@@ -27,6 +27,7 @@ const STAGES: { id: StageId; label: string; statuses: CaseStatus[] }[] = [
     label: "Awaiting patient",
     statuses: ["AWAITING_INSURANCE_DOCS", "AWAITING_VOICE_NOTE", "AWAITING_DOCUMENTS", "OPEN"],
   },
+  { id: "AWAITING_PAYER", label: "Awaiting payer", statuses: ["AWAITING_PAYER"] },
   { id: "PENDING_DOCTOR", label: "Pending approval", statuses: ["PENDING_DOCTOR_APPROVAL"] },
   { id: "SCHEDULED", label: "Scheduled", statuses: ["SCHEDULED", "APPROVED"] },
   { id: "DENIED", label: "Denied", statuses: ["DENIED"] },

@@ -53,43 +53,54 @@ _CARD_EXTRACTION_TOOL = {
 
 
 @tool
-def extract_insurance_card(s3_bucket: str, s3_key: str) -> Dict[str, Any]:
+def extract_insurance_card(
+    s3_bucket: str, s3_key: str, back_s3_bucket: str = "", back_s3_key: str = ""
+) -> Dict[str, Any]:
     """Extract structured fields from a photographed insurance card using the Bedrock vision model.
 
-    Downloads the card image from S3 and sends it to the Bedrock vision
+    Downloads the card image(s) from S3 and sends them to the Bedrock vision
     model (BEDROCK_VISION_MODEL_ID) with a forced structured-output tool
     call, so the response is validated JSON rather than parsed prose. The
     model is instructed to return null for anything it cannot actually read
     on the card rather than guessing.
 
+    Pass the FRONT image via s3_bucket/s3_key. If a BACK image is also
+    available (member id / group number are frequently printed only on the
+    back), pass it via back_s3_bucket/back_s3_key - the model reads BOTH
+    sides together and merges the fields into one result.
+
     Args:
-        s3_bucket: S3 bucket holding the card photo.
-        s3_key: S3 object key of the card photo (jpeg/png/gif/webp).
+        s3_bucket: S3 bucket holding the FRONT card photo.
+        s3_key: S3 object key of the FRONT card photo (jpeg/png/gif/webp).
+        back_s3_bucket: optional S3 bucket holding the BACK card photo.
+        back_s3_key: optional S3 object key of the BACK card photo.
 
     Returns:
         A dict with keys: payer_name, member_id, group_number, payer_id
         (each a string or None), legible (bool), uncertain_fields (list of
         field names the model flagged as low-confidence), and confidence
-        (a coarse 0-100 signal derived from legible/uncertain_fields - see
-        module docstring; this is a self-reported LLM signal, not a true
-        OCR confidence score).
+        (a coarse 0-100 signal derived from legible/uncertain_fields).
     """
-    image_bytes = aws_clients.s3().get_object(Bucket=s3_bucket, Key=s3_key)["Body"].read()
-    image_format = _image_format(s3_key)
+    content = [{"text": "Extract the fields from this insurance card. "
+                        "The FRONT is shown first" + (" and the BACK second" if back_s3_key else "") +
+                        ". Read BOTH sides and merge all fields you can find into one result."}]
+
+    front_bytes = aws_clients.s3().get_object(Bucket=s3_bucket, Key=s3_key)["Body"].read()
+    content.append({"image": {"format": _image_format(s3_key), "source": {"bytes": front_bytes}}})
+
+    if back_s3_key:
+        back_bucket = back_s3_bucket or s3_bucket
+        try:
+            back_bytes = aws_clients.s3().get_object(Bucket=back_bucket, Key=back_s3_key)["Body"].read()
+            content.append({"image": {"format": _image_format(back_s3_key), "source": {"bytes": back_bytes}}})
+        except Exception as exc:  # noqa: BLE001 - back is best-effort; front alone still works
+            log_event(logger, "warning", "card_vision.back_read_failed", error=str(exc))
 
     client = aws_clients.bedrock_runtime()
     resp = client.converse(
         modelId=config.BEDROCK_VISION_MODEL_ID,
         system=[{"text": _CARD_EXTRACTION_SYSTEM_PROMPT}],
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"text": "Extract the fields from this insurance card photo."},
-                    {"image": {"format": image_format, "source": {"bytes": image_bytes}}},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": content}],
         toolConfig={
             "tools": [_CARD_EXTRACTION_TOOL],
             "toolChoice": {"tool": {"name": "submit_card_extraction"}},
