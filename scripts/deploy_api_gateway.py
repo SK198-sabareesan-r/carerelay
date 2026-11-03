@@ -62,6 +62,7 @@ _ROUTES = [
     (("cases", "{id}"), ["GET"]),
     (("cases", "{id}", "status"), ["PATCH"]),
     (("cases", "{id}", "message"), ["POST"]),
+    (("cases", "{id}", "readiness"), ["GET"]),
     (("followups",), ["POST"]),
     (("payer-rules",), ["GET", "POST"]),
     (("stats",), ["GET"]),

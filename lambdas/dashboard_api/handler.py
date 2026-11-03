@@ -55,17 +55,23 @@ the frontend shows hospital_id as the "Hospital ID" field returned at signup
 time, since asking a returning user to retype their exact hospital display
 name (capitalization/punctuation-sensitive before slugging) is fragile UX.
 
-This is a basic staff-portal credential store sized for a clinic command
-console demo - not a hospital-grade identity system (no NPI/license
-verification, no MFA, no session tokens/JWT). See docs/DASHBOARD.md for the
-production-auth note (Cognito/SSO recommended for any real deployment).
+This is a staff-portal credential store sized for a clinic command console -
+not a full hospital-grade identity system (no NPI/license verification, no
+MFA). It DOES issue a signed session token on login/signup (see session.py):
+PBKDF2-hashed passwords + an HMAC-signed bearer token. A production system
+would layer a managed IdP (Cognito/SSO) on top - see docs/DASHBOARD.md.
 
-MULTI-TENANCY SCOPE: signup/login ARE hospital-scoped (a username only needs
-to be unique within its own hospital). Case data (PriorAuthTable) is NOT YET
-filtered by hospital - channel_dispatcher does not currently tag cases with
-a hospital_id, so /cases, /stats, and /payer-rules return the same global
-data to every signed-in hospital. See docs/DASHBOARD.md "Multi-tenancy
-status" for what a full per-hospital data boundary would require.
+MULTI-TENANCY SCOPE (ENFORCED): both authentication AND case data are
+hospital-scoped. /auth/signup and /auth/login are the only public routes;
+every other route requires a valid signed session token, and the caller's
+hospital_id + username are read FROM THAT TOKEN - never from the request
+body. Case reads/lists/stats and every mutation are filtered through
+_case_visible_to(), so a signed-in hospital sees and can act on ONLY its own
+cases (legacy cases with no hospital_id remain visible to all authenticated
+staff so older/seeded demo data isn't orphaned; any case that carries a
+hospital_id is strictly scoped). Cross-tenant access returns 404, matching
+"not found" so existence isn't leaked. See tests/test_tenant_isolation.py
+for the enforced guarantees.
 
 PriorAuthTable item shape (written by channel_dispatcher, read here):
     {
@@ -109,14 +115,15 @@ logging, status updates, payer-rule authoring) in addition to the
 auth/read routes - it is intentionally NOT purely read-only, unlike an
 earlier revision of this docstring.
 
-SECURITY NOTE: unauthenticated by default so the demo/dashboard works with
-zero setup. patient_phone_masked is pre-masked at write time by
-channel_dispatcher; this API never returns the raw phone number. Add an
-authorizer (Cognito/Lambda/API key) before any real deployment - see
-docs/DASHBOARD.md. Because writes are unauthenticated, `actor` on
-staff-initiated activity_log entries is self-reported by the client
-(whatever `actor` the request body sends) - do not treat it as a verified
-identity until an authorizer is added.
+SECURITY NOTE: all routes except /auth/signup and /auth/login REQUIRE a
+valid signed session token (see session.py) - requests without one get 401.
+The `actor` and `hospital_id` on every write are taken FROM THE VERIFIED
+TOKEN, not from the request body, so staff-initiated activity_log entries
+carry a verified identity (the client can no longer self-report who it is or
+which hospital it belongs to). patient_phone_masked is pre-masked at write
+time by channel_dispatcher; this API never returns the raw phone number.
+Token signing uses an HMAC secret (SESSION_SIGNING_SECRET); for a hardened
+deployment, front this with a managed IdP (Cognito/SSO) - see docs/DASHBOARD.md.
 """
 import hashlib
 import hmac

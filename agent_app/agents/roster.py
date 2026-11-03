@@ -46,11 +46,37 @@ SWARM_AGENT_NAMES = [
 ]
 
 
-def build_all() -> Dict[str, Agent]:
-    """Instantiate every roster agent once and return them by name."""
-    return {name: builder() for name, builder in AGENT_BUILDERS.items()}
+def _attach_observability(name: str, agent: Agent, audit=None) -> Agent:
+    """Attach the Sentinel observability hook to an agent (workshop 'hooks'
+    concept). Imported lazily so the plain build path has no extra deps.
+    The hook only observes (logs tool calls + invocation lifecycle); it never
+    changes agent behavior or decisions."""
+    from .audit_hook import SentinelObservabilityHook
+
+    hook = SentinelObservabilityHook(agent_name=name, audit=audit)
+    try:
+        agent.hooks.add_hook(hook)  # register on the already-built agent
+    except Exception:  # noqa: BLE001 - never let observability break agent construction
+        pass
+    return agent
 
 
-def build_subset(names) -> Dict[str, Agent]:
+def build_all(with_observability: bool = False, audit=None) -> Dict[str, Agent]:
+    """Instantiate every roster agent once and return them by name.
+
+    with_observability: attach the Sentinel observability hook to each agent
+    (recommended for the live/demo path so the activity timeline captures
+    every tool call). audit: an optional shared AuditTrail sink.
+    """
+    agents = {name: builder() for name, builder in AGENT_BUILDERS.items()}
+    if with_observability:
+        agents = {n: _attach_observability(n, a, audit) for n, a in agents.items()}
+    return agents
+
+
+def build_subset(names, with_observability: bool = False, audit=None) -> Dict[str, Agent]:
     """Instantiate only the named agents (e.g. the swarm subset)."""
-    return {name: AGENT_BUILDERS[name]() for name in names}
+    agents = {name: AGENT_BUILDERS[name]() for name in names}
+    if with_observability:
+        agents = {n: _attach_observability(n, a, audit) for n, a in agents.items()}
+    return agents

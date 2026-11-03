@@ -217,9 +217,11 @@ def ensure_function(lambda_client, role_arn: str, zip_bytes: bytes) -> str:
         "PAYER_PRIOR_AUTH_INBOX": os.environ.get("PAYER_PRIOR_AUTH_INBOX", ""),
         "CLINIC_NAME": os.environ.get("CLINIC_NAME", ""),
         "KMS_SIGNING_KEY_ID": config.KMS_SIGNING_KEY_ID,
-        # Intentionally blank - AgentCore Runtime is not deployed yet (see
-        # module docstring). _invoke_agent() in handler.py no-ops safely
-        # when this is unset.
+        # The agent is hosted on App Runner (AgentCore quota is 0), so the
+        # dispatcher invokes it over HTTPS via AGENT_RUNNER_URL. handler
+        # ._invoke_agent() prefers AGENT_RUNNER_URL and falls back to
+        # AGENT_RUNTIME_ARN. Set by scripts/deploy_app_runner.py in .env.
+        "AGENT_RUNNER_URL": config.AGENT_RUNNER_URL,
         "AGENT_RUNTIME_ARN": config.AGENT_RUNTIME_ARN,
         "LOG_LEVEL": config.LOG_LEVEL,
     }

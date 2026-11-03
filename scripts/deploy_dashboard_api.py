@@ -190,6 +190,9 @@ def ensure_function(lambda_client, role_arn: str, zip_bytes: bytes) -> str:
         "SES_SANDBOX_OVERRIDE_RECIPIENT": config.SES_SANDBOX_OVERRIDE_RECIPIENT,
         "WHATSAPP_PHONE_NUMBER_ID": config.WHATSAPP_PHONE_NUMBER_ID,
         "LOG_LEVEL": config.LOG_LEVEL,
+        # Signs staff session tokens (dashboard_api/session.py). Must be
+        # stable so tokens survive cold starts; sourced from .env.
+        "SESSION_SIGNING_SECRET": os.environ.get("SESSION_SIGNING_SECRET", ""),
     }
 
     try:
