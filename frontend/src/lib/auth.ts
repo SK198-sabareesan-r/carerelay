@@ -1,4 +1,5 @@
 import type { StaffProfile } from "../types/auth";
+import { setAuthToken } from "./api";
 
 /**
  * Client-side session storage for the signed-in staff profile.
@@ -31,11 +32,13 @@ export function isSignedIn(): boolean {
   return getSession() !== null;
 }
 
-export function setSession(profile: StaffProfile): void {
+export function setSession(profile: StaffProfile, token?: string): void {
   const session: Session = { ...profile, signedInAt: new Date().toISOString() };
   localStorage.setItem(LS_SESSION_KEY, JSON.stringify(session));
+  if (token) setAuthToken(token);
 }
 
 export function signOut(): void {
   localStorage.removeItem(LS_SESSION_KEY);
+  setAuthToken(null);
 }

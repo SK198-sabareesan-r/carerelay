@@ -24,6 +24,18 @@ class StorageStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
+        # Production data-retention safeguard. By default (retain_data=True)
+        # the PHI-bearing data stores are RETAINed on stack delete and have
+        # point-in-time recovery enabled, so a `cdk destroy` or accidental
+        # stack replacement can never silently drop patient/case data. For a
+        # throwaway DEMO stack you can opt into the old disposable behaviour
+        # with `cdk deploy -c retain_data=false` (DESTROY + auto-delete), which
+        # keeps the hackathon teardown easy. Either way the demo data itself
+        # is synthetic.
+        retain_data = str(self.node.try_get_context("retain_data") or "true").lower() != "false"
+        data_removal = RemovalPolicy.RETAIN if retain_data else RemovalPolicy.DESTROY
+        pitr = retain_data  # point-in-time recovery on when retaining
+
         # ---- S3: insurance cards, voice notes, signed reports ---------------
         self.media_bucket = s3.Bucket(
             self,
@@ -31,8 +43,9 @@ class StorageStack(Stack):
             encryption=s3.BucketEncryption.S3_MANAGED,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
             enforce_ssl=True,
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
+            versioned=retain_data,
+            removal_policy=data_removal,
+            auto_delete_objects=not retain_data,
             lifecycle_rules=[
                 s3.LifecycleRule(
                     # Card photos / voice notes are only needed transiently
@@ -57,7 +70,8 @@ class StorageStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             stream=dynamodb.StreamViewType.NEW_IMAGE,
             time_to_live_attribute="ttl",
-            removal_policy=RemovalPolicy.DESTROY,
+            point_in_time_recovery=pitr,
+            removal_policy=data_removal,
         )
 
         # ---- DynamoDB: patient profile -----------------------------------
@@ -68,7 +82,8 @@ class StorageStack(Stack):
                 name="patient_id", type=dynamodb.AttributeType.STRING
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            point_in_time_recovery=pitr,
+            removal_policy=data_removal,
         )
 
         # ---- DynamoDB: prior-authorization cases (the audit trail) ----------
@@ -79,7 +94,8 @@ class StorageStack(Stack):
                 name="case_id", type=dynamodb.AttributeType.STRING
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            point_in_time_recovery=pitr,
+            removal_policy=data_removal,
         )
         self.prior_auth_table.add_global_secondary_index(
             index_name="by-status",
@@ -142,7 +158,8 @@ class StorageStack(Stack):
                 name="username", type=dynamodb.AttributeType.STRING
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=RemovalPolicy.DESTROY,
+            point_in_time_recovery=pitr,
+            removal_policy=data_removal,
         )
 
         # ---- KMS: asymmetric signing key for the audit report ----------------
@@ -151,7 +168,7 @@ class StorageStack(Stack):
             "ReportSigningKey",
             key_spec=kms.KeySpec.RSA_2048,
             key_usage=kms.KeyUsage.SIGN_VERIFY,
-            removal_policy=RemovalPolicy.DESTROY,
+            removal_policy=data_removal,
             alias="carerelay-report-signing",
             description="Signs CareRelay prior-auth audit reports (SES/report_generator).",
         )

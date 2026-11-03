@@ -38,7 +38,7 @@ export function Signup() {
     setError(null);
     setSubmitting(true);
     try {
-      const { profile } = await api.signup({
+      const { profile, token } = await api.signup({
         username: username.trim(),
         password,
         display_name: displayName.trim(),
@@ -48,7 +48,7 @@ export function Signup() {
         hospital_phone: hospitalPhoneE164,
         role,
       });
-      setSession(profile);
+      setSession(profile, token);
       navigate("/analytics", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not create account. Please try again.");

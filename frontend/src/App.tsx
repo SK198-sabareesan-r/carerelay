@@ -5,6 +5,8 @@ import { Login } from "./views/Login";
 import { Signup } from "./views/Signup";
 import { IntakeQueue } from "./views/IntakeQueue";
 import { CaseDetailView } from "./views/CaseDetailView";
+import { CaseReadiness } from "./views/CaseReadiness";
+import { AgentTrace } from "./views/AgentTrace";
 import { RuleExplorer } from "./views/RuleExplorer";
 import { Analytics } from "./views/Analytics";
 import { isSignedIn } from "./lib/auth";
@@ -35,6 +37,8 @@ export default function App() {
           <Route path="analytics" element={<ErrorBoundary><Analytics /></ErrorBoundary>} />
           <Route path="queue" element={<ErrorBoundary><IntakeQueue /></ErrorBoundary>} />
           <Route path="cases/:caseId" element={<ErrorBoundary><CaseDetailView /></ErrorBoundary>} />
+          <Route path="cases/:caseId/readiness" element={<ErrorBoundary><CaseReadiness /></ErrorBoundary>} />
+          <Route path="cases/:caseId/activity" element={<ErrorBoundary><AgentTrace /></ErrorBoundary>} />
           <Route path="rules" element={<ErrorBoundary><RuleExplorer /></ErrorBoundary>} />
         </Route>
 

@@ -1,4 +1,21 @@
-import type { ActivityLogEntry, CaseDetail, CaseStatus, CaseSummary, PayerRule, Stats } from "../types/case";
+import type {
+  ActivityLogEntry,
+  CaseDetail,
+  CaseEvidence,
+  CaseStatus,
+  CaseSummary,
+  PayerRule,
+  ReadinessReport,
+  Stats,
+} from "../types/case";
+
+/** Response shape of GET /cases/:id/readiness (CareRelay Sentinel). */
+export interface CaseReadinessResponse {
+  case_id: string;
+  evidence: CaseEvidence;
+  readiness: ReadinessReport;
+  activity_log: ActivityLogEntry[];
+}
 import type { StaffProfile } from "../types/auth";
 import { mockCases, mockPayerRules, mockStats, mockCaseDetail, mockStaffDirectory } from "./mockData";
 import { evaluateMockRules } from "./mockRules";
@@ -62,12 +79,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Bearer token for the signed-in session. Stored by auth.ts on login/signup
+ * and attached to every authenticated request so the dashboard API can
+ * verify identity + hospital server-side (it no longer trusts a
+ * client-supplied actor/hospital_id). Kept here (not imported from auth.ts)
+ * to avoid a circular import; auth.ts owns the localStorage key.
+ */
+const LS_TOKEN_KEY = "carerelay_token";
+
+export function getAuthToken(): string | null {
+  return localStorage.getItem(LS_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string | null): void {
+  if (token) localStorage.setItem(LS_TOKEN_KEY, token);
+  else localStorage.removeItem(LS_TOKEN_KEY);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const base = getApiBase();
   if (!base) {
     throw new ApiError("No API base URL configured. Open Settings to set one, or switch to Mock mode.");
   }
-  const res = await fetch(`${base}${path}`, { cache: "no-store", ...init });
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${base}${path}`, { cache: "no-store", ...init, headers });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new ApiError(body?.error || `Request failed: ${res.status} ${res.statusText}`, res.status);
@@ -128,6 +168,83 @@ function computeMockStats(cases: CaseSummary[]): Stats {
   };
 }
 
+/**
+ * Mock Sentinel readiness fixture mirroring the P0 synthetic scenario the
+ * backend tests drive (tests/conftest.py synthetic_conflict_case): a CPT
+ * mismatch across the order and clinical notes, a missing imaging report, and
+ * a low-confidence member-id read. Lets the readiness/evidence views render a
+ * realistic, conflicted case fully offline.
+ */
+function mockReadiness(caseId: string): CaseReadinessResponse {
+  const evidence: CaseEvidence = {
+    case_id: caseId,
+    patient_name: "Jaafar",
+    payer_id: "PAYER-ACME",
+    cpt_code: "29881",
+    procedure_name: "Knee arthroscopy, meniscectomy",
+    symptom_summary: "Persistent knee pain and swelling after a fall two weeks ago.",
+    documents: [
+      {
+        id: "doc-card", kind: "insurance_card", legible: true, classification_confidence: "high",
+        fields: [
+          { name: "payer_name", value: "ACME Health", source_document_id: "doc-card", confidence: "high" },
+          { name: "member_id", value: "ACM-83920145", source_document_id: "doc-card", confidence: "low", note: "glare on card" },
+          { name: "patient_name", value: "Jaafar", source_document_id: "doc-card", confidence: "high" },
+        ],
+      },
+      {
+        id: "doc-order", kind: "procedure_order", legible: true, classification_confidence: "high",
+        fields: [
+          { name: "cpt_code", value: "29881", source_document_id: "doc-order", confidence: "high" },
+          { name: "patient_name", value: "Jaafar", source_document_id: "doc-order", confidence: "high" },
+        ],
+      },
+      {
+        id: "doc-notes", kind: "clinical_notes", legible: true, classification_confidence: "high",
+        fields: [
+          { name: "cpt_code", value: "29826", source_document_id: "doc-notes", confidence: "high" },
+          { name: "patient_name", value: "Jaafar", source_document_id: "doc-notes", confidence: "high" },
+        ],
+      },
+      { id: "doc-policy", kind: "payer_policy", legible: true, classification_confidence: "high", fields: [] },
+    ],
+  };
+
+  const readiness: ReadinessReport = {
+    case_id: caseId,
+    payer_id: "PAYER-ACME",
+    cpt_code: "29881",
+    matched_rule_id: "ACME-29881-v1",
+    status: "conflict",
+    can_progress: false,
+    requirement_checks: [
+      { requirement_id: "ACME-29881-v1:doc-clinical_notes", description: "A legible clinical notes document must be on file.", satisfied: true, satisfied_by_document_id: "doc-notes", critical: true, note: "Satisfied by doc-notes (clinical_notes)." },
+      { requirement_id: "ACME-29881-v1:doc-xray_or_mri", description: "A legible imaging report must be on file.", satisfied: false, critical: true, note: "No xray_or_mri document on file." },
+      { requirement_id: "ACME-29881-v1:cpt-consistency", description: "The procedure code on all documents must be 29881.", satisfied: false, critical: true, note: "Expected '29881' but found 29826 (doc-notes)." },
+    ],
+    discrepancies: [
+      { id: "disc-mismatch-cpt_code", kind: "field_mismatch", severity: "critical", field_name: "cpt_code", summary: "'cpt_code' disagrees across documents: 29881 (doc-order) vs 29826 (doc-notes)", source_document_ids: ["doc-order", "doc-notes"], conflicting_values: ["29881", "29826"], resolved: false, recommended_action: "Request a corrected procedure order so the CPT matches the clinical notes." },
+      { id: "disc-lowconf-doc-card-member_id", kind: "low_confidence", severity: "warning", field_name: "member_id", summary: "'member_id' was extracted with low confidence from doc-card (glare on card).", source_document_ids: ["doc-card"], conflicting_values: ["ACM-83920145"], resolved: false },
+      { id: "disc-req-xray", kind: "missing_document", severity: "critical", summary: "Requirement not satisfied: No xray_or_mri document on file.", related_requirement_id: "ACME-29881-v1:doc-xray_or_mri", source_document_ids: [], conflicting_values: [], resolved: false, recommended_action: "Request the imaging report (x-ray or MRI) from the referring clinician." },
+    ],
+    summary: "Case has a critical cross-document CPT conflict and a missing imaging report. It cannot advance until a human resolves both items.",
+  };
+
+  const now = Date.now();
+  const t = (offsetSec: number) => new Date(now - (60 - offsetSec) * 1000).toISOString();
+  const activity_log: ActivityLogEntry[] = [
+    { timestamp: t(0), event: "GRAPH_START", actor: "case_graph", detail: `Case ${caseId} entered the lifecycle graph.` },
+    { timestamp: t(1), event: "POLICY_RETRIEVED", actor: "policy_retrieval", detail: "Matched rule ACME-29881-v1; 3 requirement(s)." },
+    { timestamp: t(2), event: "RECONCILED", actor: "reconciliation", detail: "2 discrepancy(ies) detected." },
+    { timestamp: t(3), event: "READINESS_COMPUTED", actor: "readiness_engine", detail: "Status=conflict; can_progress=False." },
+    { timestamp: t(4), event: "DECIDER_ROUTED", actor: "decider", detail: "action=INVESTIGATE_CONFLICT (rule): a critical cross-document conflict was detected." },
+    { timestamp: t(5), event: "SAFETY_VERDICT", actor: "safety_critic", detail: "Human review required: unresolved critical items block progression." },
+    { timestamp: t(6), event: "GRAPH_DONE", actor: "case_graph", detail: `Case ${caseId} finished the lifecycle graph.` },
+  ];
+
+  return { case_id: caseId, evidence, readiness, activity_log };
+}
+
 export interface DateRange {
   from?: string; // YYYY-MM-DD, inclusive
   to?: string; // YYYY-MM-DD, inclusive
@@ -164,6 +281,20 @@ export const api = {
       return delay({ case: detail });
     }
     return request(`/cases/${encodeURIComponent(caseId)}`);
+  },
+
+  /**
+   * Sentinel evidence-readiness snapshot for a case: the normalized evidence,
+   * the readiness report (status + per-requirement checks + discrepancies),
+   * and the activity log (case audit trail). Backed live by
+   * GET /cases/:id/readiness on the dashboard API; in mock mode a derived
+   * fixture is returned so the view is fully demoable offline.
+   */
+  async getReadiness(caseId: string): Promise<CaseReadinessResponse> {
+    if (getDataMode() === "mock") {
+      return delay(mockReadiness(caseId));
+    }
+    return request(`/cases/${encodeURIComponent(caseId)}/readiness`);
   },
 
   async createCase(input: {
@@ -427,7 +558,7 @@ export const api = {
     hospital_email: string;
     hospital_phone: string;
     role?: string;
-  }): Promise<{ profile: StaffProfile }> {
+  }): Promise<{ profile: StaffProfile; token?: string }> {
     if (getDataMode() === "mock") {
       const hospitalId = slugifyHospital(input.hospital_name);
       const exists = mockStaffDirectory.some(
@@ -458,12 +589,13 @@ export const api = {
           hospital_email: entry.hospital_email,
           hospital_phone: entry.hospital_phone,
         },
+        token: `mock.${entry.hospital_id}.${entry.username}`,
       });
     }
     return request("/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   },
 
-  async login(input: { username: string; password: string; hospital_id: string }): Promise<{ profile: StaffProfile }> {
+  async login(input: { username: string; password: string; hospital_id: string }): Promise<{ profile: StaffProfile; token?: string }> {
     if (getDataMode() === "mock") {
       const hospitalId = input.hospital_id.trim().toLowerCase();
       const match = mockStaffDirectory.find(
@@ -484,6 +616,7 @@ export const api = {
           hospital_email: match.hospital_email,
           hospital_phone: match.hospital_phone,
         },
+        token: `mock.${match.hospital_id}.${match.username}`,
       });
     }
     return request("/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });

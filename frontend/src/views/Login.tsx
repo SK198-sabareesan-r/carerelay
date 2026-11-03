@@ -17,12 +17,12 @@ export function Login() {
     setError(null);
     setSubmitting(true);
     try {
-      const { profile } = await api.login({
+      const { profile, token } = await api.login({
         username: username.trim(),
         password,
         hospital_id: hospitalId.trim(),
       });
-      setSession(profile);
+      setSession(profile, token);
       navigate("/analytics", { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Sign-in failed. Please try again.");

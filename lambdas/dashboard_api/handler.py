@@ -131,6 +131,8 @@ from typing import Any, Dict, List, Optional
 from common import aws_clients, config
 from common.logging_utils import get_logger, log_event
 
+from . import session as _session
+
 logger = get_logger("dashboard_api")
 
 _MEDIA_URL_TTL = 900  # 15 minutes
@@ -166,7 +168,7 @@ def _hospital_id(hospital_name: str) -> str:
 
 _CORS = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "content-type",
+    "Access-Control-Allow-Headers": "content-type,authorization",
     "Access-Control-Allow-Methods": "GET,POST,PATCH,OPTIONS",
     "Content-Type": "application/json",
 }
@@ -193,10 +195,18 @@ def handler(event, context):
     case_id = path_params.get("id")
 
     try:
+        # ---- public (unauthenticated) routes ----
         if method == "POST" and "/auth/signup" in path:
             return _handle_signup(_parse_body(event))
         if method == "POST" and "/auth/login" in path:
             return _handle_login(_parse_body(event))
+
+        # ---- everything below requires a valid signed session token ----
+        claims = _session.claims_from_event(event)
+        if claims is None:
+            return _respond(401, {"error": "Authentication required. Sign in again."})
+        actor_hospital = str(claims.get("hid") or "")
+        actor_username = str(claims.get("u") or "staff")
 
         if "/payer-rules" in path:
             if method == "POST":
@@ -204,31 +214,134 @@ def handler(event, context):
             return _respond(200, {"rules": _list_payer_rules()})
 
         if "/stats" in path:
-            return _respond(200, _compute_stats(query_params))
+            return _respond(200, _compute_stats(query_params, hospital_id=actor_hospital))
+
+        if case_id and "/readiness" in path:
+            return _handle_readiness(case_id, actor_hospital)
 
         if case_id and "/status" in path:
-            return _handle_update_status(case_id, _parse_body(event))
+            return _handle_update_status(case_id, _parse_body(event), actor_hospital, actor_username)
 
         if case_id and method == "POST" and "/message" in path:
-            return _handle_send_message(case_id, _parse_body(event))
+            return _handle_send_message(case_id, _parse_body(event), actor_hospital, actor_username)
 
         if case_id:
             item = _get_case(case_id)
             if not item:
                 return _respond(404, {"error": "case not found"})
+            if not _case_visible_to(item, actor_hospital):
+                return _respond(404, {"error": "case not found"})
             return _respond(200, {"case": _present(item, detail=True)})
 
         if method == "POST" and "/followups" in path:
-            return _handle_start_followup(_parse_body(event))
+            return _handle_start_followup(_parse_body(event), actor_hospital, actor_username)
 
         if method == "POST" and "/cases" in path:
-            return _handle_create_case(_parse_body(event))
+            return _handle_create_case(_parse_body(event), actor_hospital, actor_username)
 
-        items = _list_cases(query_params)
+        items = [i for i in _list_cases(query_params) if _case_visible_to(i, actor_hospital)]
         return _respond(200, {"cases": [_present(i) for i in items], "count": len(items)})
     except Exception as exc:  # noqa: BLE001
         log_event(logger, "error", "dashboard.failed", path=path, error=str(exc))
         return _respond(500, {"error": "internal error"})
+
+
+def _case_visible_to(item: Dict[str, Any], actor_hospital: str) -> bool:
+    """Tenant isolation: a case is visible only to its own hospital.
+
+    Legacy/untagged cases (no hospital_id, e.g. older seeded data or cases
+    created before multi-tenancy) are visible to all authenticated staff so
+    the demo data set isn't orphaned; any case that DOES carry a hospital_id
+    is strictly scoped to that hospital. A real deployment would backfill
+    hospital_id on every row and drop the legacy allowance.
+    """
+    case_hospital = str(item.get("hospital_id") or "")
+    if not case_hospital:
+        return True
+    return case_hospital == actor_hospital
+
+
+def _hospital_name_for(hospital_id: str) -> str:
+    """Look up a hospital's display name from any staff row for that tenant.
+    Returns '' if not found. Used so case rows carry the real hospital name
+    derived from the verified session, not a client-supplied value."""
+    if not hospital_id:
+        return ""
+    try:
+        resp = _staff_table().query(
+            KeyConditionExpression="hospital_id = :h",
+            ExpressionAttributeValues={":h": hospital_id},
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if items:
+            return str(items[0].get("hospital_name", "")) or ""
+    except Exception as exc:  # noqa: BLE001
+        log_event(logger, "warning", "hospital_name.lookup_failed", error=str(exc))
+    return ""
+
+
+def _validate_status_transition(item: Dict[str, Any], old_status: str, new_status: str) -> Dict[str, Any]:
+    """Deterministic state gate via agent_app.services.state_transition.
+
+    Builds a ReadinessReport from the case's stored Sentinel readiness (if
+    present) so progressions toward authorization are blocked while critical
+    discrepancies are unresolved. If the case has no Sentinel readiness
+    attached (e.g. a legacy case), only the legal-adjacency check applies.
+    Returns {"allowed": bool, "reason": str}.
+    """
+    import sys
+
+    _lambdas_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _repo_root = os.path.dirname(_lambdas_dir)
+    if _repo_root not in sys.path:
+        sys.path.insert(0, _repo_root)
+    try:
+        from agent_app.services import state_transition
+        from agent_app.models import ReadinessReport
+    except Exception as exc:  # noqa: BLE001 - never block a status change on an import failure
+        log_event(logger, "warning", "state_gate.import_failed", error=str(exc))
+        return {"allowed": True, "reason": "state engine unavailable; adjacency not enforced"}
+
+    readiness = None
+    stored = item.get("sentinel_readiness")
+    if stored:
+        try:
+            readiness = ReadinessReport.model_validate(_num_safe(stored))
+        except Exception:  # noqa: BLE001 - malformed stored readiness => skip the readiness gate
+            readiness = None
+
+    result = state_transition.validate_transition(old_status, new_status, readiness)
+    return {"allowed": result.allowed, "reason": result.reason}
+
+
+def _handle_readiness(case_id: str, actor_hospital: str):
+    """GET /cases/{id}/readiness - the CareRelay Sentinel evidence-readiness
+    snapshot for a case (normalized evidence, the readiness report, and the
+    activity log). If the case has a stored sentinel_readiness/sentinel_evidence
+    it is returned; otherwise an empty-but-valid shape is returned so the
+    frontend renders gracefully."""
+    item = _get_case(case_id)
+    if not item:
+        return _respond(404, {"error": "case not found"})
+    if not _case_visible_to(item, actor_hospital):
+        return _respond(404, {"error": "case not found"})
+
+    evidence = _num_safe(item.get("sentinel_evidence") or {
+        "case_id": case_id,
+        "patient_name": item.get("patient_name"),
+        "payer_id": item.get("payer_id"),
+        "cpt_code": item.get("cpt_code"),
+        "procedure_name": item.get("procedure_name"),
+        "documents": [],
+    })
+    readiness = _num_safe(item.get("sentinel_readiness") or {})
+    return _respond(200, {
+        "case_id": case_id,
+        "evidence": evidence,
+        "readiness": readiness,
+        "activity_log": _num_safe(item.get("activity_log", [])),
+    })
 
 
 def _parse_body(event) -> Dict[str, Any]:
@@ -339,7 +452,8 @@ def _handle_signup(body: Dict[str, Any]):
     except Exception as exc:  # noqa: BLE001
         log_event(logger, "warning", "auth.signup.onboarding_email_failed", error=str(exc))
 
-    return _respond(201, {"profile": _profile(item)})
+    token = _session.issue_token(hospital_id, username, role)
+    return _respond(201, {"profile": _profile(item), "token": token})
 
 
 def _handle_login(body: Dict[str, Any]):
@@ -363,7 +477,8 @@ def _handle_login(body: Dict[str, Any]):
         return _respond(401, {"error": "Invalid hospital ID, username, or password."})
 
     log_event(logger, "info", "auth.login.ok", hospital_id=hospital_id, username=username)
-    return _respond(200, {"profile": _profile(item)})
+    token = _session.issue_token(item["hospital_id"], item["username"], item.get("role", "Clinic Staff"))
+    return _respond(200, {"profile": _profile(item), "token": token})
 
 
 # --------------------------------------------------------------------------- #
@@ -419,7 +534,7 @@ def _append_activity(case_id: str, event: str, actor: str, detail: str) -> None:
     )
 
 
-def _handle_start_followup(body: Dict[str, Any]):
+def _handle_start_followup(body: Dict[str, Any], actor_hospital: str = "", actor_username: str = "staff"):
     """Staff-initiated follow-up flow (the primary CareRelay workflow).
 
     After an in-person consult, a doctor/staff member decides the patient
@@ -449,9 +564,11 @@ def _handle_start_followup(body: Dict[str, Any]):
     payer_id = str(body.get("payer_id", "")).strip()
     has_insurance = bool(body.get("has_insurance", False))
     appointment_datetime = str(body.get("appointment_datetime", "")).strip()
-    actor = str(body.get("actor", "")).strip() or "staff"
-    hospital_id = str(body.get("hospital_id", "")).strip()
-    hospital_name = str(body.get("hospital_name", "")).strip()
+    # Identity + tenant come from the verified session token, NOT the request
+    # body - the client can no longer self-report its actor or hospital.
+    actor = actor_username or "staff"
+    hospital_id = actor_hospital
+    hospital_name = _hospital_name_for(hospital_id) or str(body.get("hospital_name", "")).strip()
 
     if not patient_name or not patient_phone or not procedure_name:
         return _respond(400, {"error": "patient_name, patient_phone, and procedure_name are required."})
@@ -559,7 +676,7 @@ def _handle_start_followup(body: Dict[str, Any]):
     return _respond(201, {"case": _present(_get_case(case_id) or item, detail=True)})
 
 
-def _handle_create_case(body: Dict[str, Any]):
+def _handle_create_case(body: Dict[str, Any], actor_hospital: str = "", actor_username: str = "staff"):
     """Manually log a staff-entered intake (e.g. a phone/walk-in case with
     no WhatsApp message behind it). Runs the SAME deterministic rules_engine
     logic the agent pipeline uses, so a manually-logged case gets a real
@@ -573,12 +690,10 @@ def _handle_create_case(body: Dict[str, Any]):
     channel = str(body.get("channel", "whatsapp")).strip().lower()
     patient_phone_masked = str(body.get("patient_phone_masked", "")).strip() or "***0000"
     patient_phone = str(body.get("patient_phone", "")).strip()  # optional: enables POST /cases/{id}/message later
-    actor = str(body.get("actor", "")).strip() or "staff"
-    # Multi-tenancy (Option A): a console-logged case is tagged with the
-    # authenticated staff member's own hospital, sent by the frontend from
-    # the signed-in session.
-    hospital_id = str(body.get("hospital_id", "")).strip()
-    hospital_name = str(body.get("hospital_name", "")).strip()
+    # Identity + tenant from the verified token, not the request body.
+    actor = actor_username or "staff"
+    hospital_id = actor_hospital
+    hospital_name = _hospital_name_for(hospital_id) or str(body.get("hospital_name", "")).strip()
 
     if not patient_name or not cpt_code or not procedure_name or not payer_id:
         return _respond(400, {
@@ -624,9 +739,9 @@ def _handle_create_case(body: Dict[str, Any]):
     return _respond(201, {"case": _present(item, detail=True)})
 
 
-def _handle_update_status(case_id: str, body: Dict[str, Any]):
+def _handle_update_status(case_id: str, body: Dict[str, Any], actor_hospital: str = "", actor_username: str = "staff"):
     new_status = str(body.get("status", "")).strip().upper()
-    actor = str(body.get("actor", "")).strip() or "staff"
+    actor = actor_username or "staff"
     note = str(body.get("note", "")).strip()
 
     if new_status not in _VALID_STATUSES:
@@ -635,8 +750,22 @@ def _handle_update_status(case_id: str, body: Dict[str, Any]):
     item = _get_case(case_id)
     if not item:
         return _respond(404, {"error": "case not found"})
+    if not _case_visible_to(item, actor_hospital):
+        return _respond(404, {"error": "case not found"})
 
     old_status = item.get("status", "OPEN")
+
+    # Deterministic state-transition gate (CareRelay Sentinel). Validates the
+    # transition against the allowed adjacency map AND, for progressions
+    # toward authorization, against the case's readiness (unresolved critical
+    # discrepancies block it). This prevents an unsafe or illegal status jump
+    # regardless of what the client requested.
+    gate = _validate_status_transition(item, old_status, new_status)
+    if not gate.get("allowed", True):
+        log_event(logger, "warning", "case.status_change.blocked",
+                  case_id=case_id, old=old_status, new=new_status, reason=gate.get("reason"))
+        return _respond(409, {"error": gate.get("reason", "Transition not permitted.")})
+
     _cases_table().update_item(
         Key={"case_id": case_id},
         UpdateExpression="SET #s = :new_status",
@@ -672,9 +801,18 @@ def _handle_update_status(case_id: str, body: Dict[str, Any]):
 
 
 def _record_payer_confirmation(case_id: str, item: Dict[str, Any], actor: str) -> None:
-    """Append the payer's inbound confirmation to the case's payer_emails
-    correspondence log, so the console's Payer-emails tab shows the full
-    request -> approval exchange."""
+    """Append a CLEARLY-LABELLED simulated payer confirmation to the case's
+    payer_emails log.
+
+    IMPORTANT: this is NOT a real payer response. CareRelay does not receive
+    or parse an actual inbound email from the insurer here - when staff
+    advance the case past the payer wait, this records a demonstration/
+    simulation entry so the console's payer-email thread shows a complete
+    request -> response exchange for the walkthrough. The entry is explicitly
+    marked simulated (`simulated: True` and a visible "[SIMULATED ...]"
+    prefix) so it can never be mistaken for a genuine insurer confirmation.
+    A production system would ingest the payer's real written response (or a
+    structured EDI 278 response) instead of synthesizing this."""
     import time as _time
 
     card = item.get("extracted_card", {}) or {}
@@ -682,13 +820,16 @@ def _record_payer_confirmation(case_id: str, item: Dict[str, Any], actor: str) -
     payer_label = card.get("payer_name") or item.get("payer_id") or "the payer"
     entry = {
         "direction": "inbound",
+        "simulated": True,
         "subject": f"RE: Prior Authorization Request - {item.get('procedure_name', 'procedure')}",
         "from_addr": os.environ.get("PAYER_PRIOR_AUTH_INBOX", "intake@payer.example.com"),
         "to_addr": config.SES_SENDER or "clinic@carerelay",
-        "from_label": payer_label,
+        "from_label": f"{payer_label} (simulated)",
         "to_label": clinic,
-        "body": ("Prior authorization APPROVED for the requested procedure. "
-                 "Coverage confirmed; please proceed. Authorization on file with the payer."),
+        "body": ("[SIMULATED PAYER RESPONSE - demonstration only, not a real "
+                 "insurer confirmation] Prior authorization indicated as approved "
+                 "for the requested procedure in this walkthrough. A production "
+                 "deployment ingests the payer's actual written/EDI response here."),
         "message_id": None,
         "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
     }
@@ -696,6 +837,10 @@ def _record_payer_confirmation(case_id: str, item: Dict[str, Any], actor: str) -
         Key={"case_id": case_id},
         UpdateExpression="SET payer_emails = list_append(if_not_exists(payer_emails, :e), :entry)",
         ExpressionAttributeValues={":e": [], ":entry": [entry]},
+    )
+    _append_activity(
+        case_id, "PAYER_RESPONSE_SIMULATED", "system",
+        "Recorded a SIMULATED payer approval (demonstration only; not a real insurer response).",
     )
 
 
@@ -720,7 +865,7 @@ def _dispatch_doctor_card_for_case(case_id: str, item: Dict[str, Any]) -> None:
             lines.append(f"Reported symptoms: {item['perceived_facts'][0]}")
         lines.append(f"Procedure: {item.get('procedure_name', '')} (CPT {item.get('cpt_code', '')})")
         lines.append(f"Insurer: {card.get('payer_name', 'n/a')} | Member ID: {card.get('member_id', 'n/a')}")
-        lines.append("Insurance: APPROVED by payer. Awaiting your sign-off to confirm the visit.")
+        lines.append("Insurance: cleared for this procedure. Awaiting your sign-off to confirm the visit.")
         if v.get("matched_rule_id"):
             lines.append(f"Matched rule: {v.get('matched_rule_id')}")
         body = "\n".join(lines)
@@ -736,7 +881,7 @@ def _dispatch_doctor_card_for_case(case_id: str, item: Dict[str, Any]) -> None:
             log_event(logger, "warning", "doctor_card.send_failed", case_id=case_id, error=str(exc))
 
 
-def _handle_send_message(case_id: str, body: Dict[str, Any]):
+def _handle_send_message(case_id: str, body: Dict[str, Any], actor_hospital: str = "", actor_username: str = "staff"):
     """Lets staff send a free-text WhatsApp message directly to the
     patient tied to a case - e.g. answering a question the automated flow
     didn't anticipate, or following up manually. This bypasses the agent
@@ -750,7 +895,7 @@ def _handle_send_message(case_id: str, body: Dict[str, Any]):
     behind it, so this will 400 for those unless a phone number was
     provided at creation time."""
     text = str(body.get("text", "")).strip()
-    actor = str(body.get("actor", "")).strip() or "staff"
+    actor = actor_username or "staff"
 
     if not text:
         return _respond(400, {"error": "text is required."})
@@ -759,6 +904,8 @@ def _handle_send_message(case_id: str, body: Dict[str, Any]):
 
     item = _get_case(case_id)
     if not item:
+        return _respond(404, {"error": "case not found"})
+    if not _case_visible_to(item, actor_hospital):
         return _respond(404, {"error": "case not found"})
 
     patient_phone = item.get("patient_phone")
@@ -879,8 +1026,8 @@ def _handle_create_rule(body: Dict[str, Any]):
     return _respond(201, {"rule": item})
 
 
-def _compute_stats(query_params: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    items = _list_cases(query_params)
+def _compute_stats(query_params: Optional[Dict[str, str]] = None, hospital_id: str = "") -> Dict[str, Any]:
+    items = [i for i in _list_cases(query_params) if _case_visible_to(i, hospital_id)]
     outcomes = Counter(i.get("verification", {}).get("outcome", "UNKNOWN") for i in items)
     statuses = Counter(i.get("status", "UNKNOWN") for i in items)
     channels = Counter(i.get("channel", "unknown") for i in items)

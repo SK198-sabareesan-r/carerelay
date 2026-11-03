@@ -21,6 +21,15 @@ export function useCase(caseId: string | undefined) {
   });
 }
 
+export function useReadiness(caseId: string | undefined) {
+  return useQuery({
+    queryKey: ["readiness", caseId],
+    queryFn: () => api.getReadiness(caseId as string),
+    enabled: !!caseId,
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
 export function usePayerRules() {
   return useQuery({
     queryKey: ["payer-rules"],

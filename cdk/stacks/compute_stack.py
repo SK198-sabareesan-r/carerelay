@@ -239,6 +239,10 @@ class ComputeStack(Stack):
             "SES_COMMAND_RECIPIENTS": os.environ.get("SES_COMMAND_RECIPIENTS", ""),
             "INTAKE_BATCH_WINDOW_SECONDS": os.environ.get("INTAKE_BATCH_WINDOW_SECONDS", "15"),
             "LOG_LEVEL": os.environ.get("LOG_LEVEL", "INFO"),
+            # Secret used by dashboard_api/session.py to HMAC-sign staff
+            # session tokens. MUST be set to a stable, non-empty value in any
+            # real deployment (otherwise tokens reset on every cold start).
+            "SESSION_SIGNING_SECRET": os.environ.get("SESSION_SIGNING_SECRET", ""),
         }
 
         def code_asset() -> _lambda.Code:
@@ -297,9 +301,21 @@ class ComputeStack(Stack):
         intake_events_table.grant_stream_read(dispatcher_fn)
         patients_table.grant_read_write_data(dispatcher_fn)
         prior_auth_table.grant_read_write_data(dispatcher_fn)
-        prior_auth_table.grant_read_data(dashboard_fn)
-        payer_rules_table.grant_read_data(dashboard_fn)
+        # dashboard_api is NOT read-only: it creates cases/follow-ups, updates
+        # status, appends activity-log entries, and records payer/doctor
+        # events - so it needs read+write on the case + rules tables.
+        prior_auth_table.grant_read_write_data(dashboard_fn)
+        payer_rules_table.grant_read_write_data(dashboard_fn)  # POST /payer-rules authoring
         staff_users_table.grant_read_write_data(dashboard_fn)  # signup writes, login reads
+
+        # dashboard_api can also send WhatsApp (staff free-text message +
+        # doctor approval-card dispatch on PENDING_DOCTOR_APPROVAL).
+        dashboard_fn.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["social-messaging:SendWhatsAppMessage"],
+                resources=["*"],
+            )
+        )
 
         signing_key.grant_sign(dispatcher_fn)
 
@@ -380,29 +396,53 @@ class ComputeStack(Stack):
         webhook.add_method("POST")
         webhook.add_method("GET")  # Meta verification challenge
 
-        # ---- Dashboard API (read-only, CORS-enabled for the frontend/ app) ---
+        # ---- Dashboard API (CORS-enabled for the frontend/ app) --------------
         #
-        # SECURITY: intentionally unauthenticated so the frontend app runs
-        # with zero setup. dashboard_api never returns raw patient phone
-        # numbers (masked at write time) and is strictly read-only. Add an
-        # authorizer before any real deployment - see docs/DASHBOARD.md.
+        # AUTH: /auth/signup + /auth/login are public and return a signed
+        # session token (dashboard_api/session.py). EVERY other route requires
+        # that token in the Authorization header - the Lambda verifies it and
+        # derives the caller's identity + hospital from it (tenant isolation),
+        # so the client can no longer self-report actor/hospital. Raw patient
+        # phone numbers are never returned (masked at write time).
+        #
+        # All routes the handler implements are wired here (an earlier
+        # revision only exposed the GET + auth routes, leaving follow-ups,
+        # status changes, messaging, readiness, and rule-creation unreachable
+        # over HTTP - now fixed).
         dashboard_integration = apigw.LambdaIntegration(dashboard_fn)
         cors = apigw.CorsOptions(
             allow_origins=apigw.Cors.ALL_ORIGINS,
-            allow_methods=["GET", "OPTIONS"],
+            allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization"],
         )
         cors_post = apigw.CorsOptions(
             allow_origins=apigw.Cors.ALL_ORIGINS,
             allow_methods=["POST", "OPTIONS"],
+            allow_headers=["Content-Type", "Authorization"],
         )
 
         cases = api.root.add_resource("cases", default_cors_preflight_options=cors)
         cases.add_method("GET", dashboard_integration)
+        cases.add_method("POST", dashboard_integration)  # manually log a case
         case_by_id = cases.add_resource("{id}", default_cors_preflight_options=cors)
         case_by_id.add_method("GET", dashboard_integration)
+        # PATCH /cases/{id}/status  - status transition (deterministically gated)
+        case_status = case_by_id.add_resource("status", default_cors_preflight_options=cors)
+        case_status.add_method("PATCH", dashboard_integration)
+        # POST /cases/{id}/message  - staff free-text WhatsApp message
+        case_message = case_by_id.add_resource("message", default_cors_preflight_options=cors)
+        case_message.add_method("POST", dashboard_integration)
+        # GET /cases/{id}/readiness - Sentinel evidence-readiness snapshot
+        case_readiness = case_by_id.add_resource("readiness", default_cors_preflight_options=cors)
+        case_readiness.add_method("GET", dashboard_integration)
+
+        # POST /followups - staff-initiated follow-up flow
+        followups = api.root.add_resource("followups", default_cors_preflight_options=cors_post)
+        followups.add_method("POST", dashboard_integration)
 
         payer_rules = api.root.add_resource("payer-rules", default_cors_preflight_options=cors)
         payer_rules.add_method("GET", dashboard_integration)
+        payer_rules.add_method("POST", dashboard_integration)  # author a new rule
 
         stats = api.root.add_resource("stats", default_cors_preflight_options=cors)
         stats.add_method("GET", dashboard_integration)
