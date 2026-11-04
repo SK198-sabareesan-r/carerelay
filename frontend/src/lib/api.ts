@@ -27,7 +27,7 @@ import { evaluateMockRules } from "./mockRules";
  * via VITE_API_BASE_URL at build time, or at runtime in the Settings panel
  * (persisted to localStorage, takes priority over this default).
  */
-const LIVE_API_BASE_DEFAULT = "https://b16m4614vd.execute-api.ap-south-1.amazonaws.com/prod";
+const LIVE_API_BASE_DEFAULT = "https://ynwrzlw6u5.execute-api.ap-south-1.amazonaws.com/prod";
 const ENV_API_BASE = import.meta.env.VITE_API_BASE_URL || LIVE_API_BASE_DEFAULT;
 
 const LS_KEY = "carerelay_api_base";
@@ -43,8 +43,19 @@ const CURRENT_MODE_VERSION = "2";
 
 export type DataMode = "live" | "mock";
 
+// API gateways that have been torn down. A browser that saved one of these in
+// Settings during an earlier deployment would otherwise keep calling a dead
+// host forever ("Failed to fetch" on every page), so a stored value matching
+// any of these is discarded in favour of the built-in default.
+const DEAD_API_IDS = ["b16m4614vd"];
+
 export function getApiBase(): string {
-  return (localStorage.getItem(LS_KEY) ?? ENV_API_BASE ?? "").replace(/\/$/, "");
+  const stored = localStorage.getItem(LS_KEY);
+  if (stored && DEAD_API_IDS.some((id) => stored.includes(id))) {
+    localStorage.removeItem(LS_KEY);
+    return (ENV_API_BASE ?? "").replace(/\/$/, "");
+  }
+  return (stored ?? ENV_API_BASE ?? "").replace(/\/$/, "");
 }
 
 export function setApiBase(url: string) {

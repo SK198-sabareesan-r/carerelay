@@ -22,6 +22,10 @@ from ..models import ReadinessReport
 # Sentinel adds UNDER_REVIEW (evidence pipeline running) and
 # READY_FOR_REVIEW (pipeline cleared; a human may now act).
 _ALLOWED: Dict[str, Set[str]] = {
+    # Follow-up flow entry states (set by POST /followups). Staff may move a
+    # follow-up forward once documents arrive, or close it out.
+    "AWAITING_INSURANCE_DOCS": {"AWAITING_PAYER", "AWAITING_DOCUMENTS", "UNDER_REVIEW", "DENIED"},
+    "AWAITING_VOICE_NOTE": {"PENDING_DOCTOR_APPROVAL", "AWAITING_DOCUMENTS", "UNDER_REVIEW", "DENIED"},
     "OPEN": {"AWAITING_DOCUMENTS", "UNDER_REVIEW", "DENIED"},
     "AWAITING_DOCUMENTS": {"UNDER_REVIEW", "AWAITING_DOCUMENTS", "DENIED"},
     "UNDER_REVIEW": {"READY_FOR_REVIEW", "AWAITING_DOCUMENTS", "AWAITING_PAYER", "DENIED"},

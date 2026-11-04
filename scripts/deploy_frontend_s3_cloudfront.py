@@ -188,7 +188,13 @@ def main() -> None:
 
     ensure_bucket(s3, SITE_BUCKET, region)
     upload_dist(s3, SITE_BUCKET)
-    dist_id, domain = ensure_distribution(cf, SITE_BUCKET, region)
+    try:
+        dist_id, domain = ensure_distribution(cf, SITE_BUCKET, region)
+    except Exception as exc:  # noqa: BLE001 - CloudFront can be account-gated
+        print(f"\n[cloudfront] Skipped: {str(exc)[:200]}")
+        print("The site is still live over the S3 website endpoint (HTTP):")
+        print(f"  http://{website_endpoint(SITE_BUCKET, region)}")
+        return
     invalidate(cf, dist_id)
 
     print(f"\n[cloudfront] Distribution ID: {dist_id}")

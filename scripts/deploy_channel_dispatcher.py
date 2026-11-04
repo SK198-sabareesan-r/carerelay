@@ -132,6 +132,9 @@ def ensure_role(iam_client) -> str:
                 "Resource": [
                     f"arn:aws:dynamodb:{region}:{account_id}:table/{config.PRIOR_AUTH_TABLE}",
                     f"arn:aws:dynamodb:{region}:{account_id}:table/{config.PATIENTS_TABLE}",
+                    # The dispatcher marks inbound events processed / dedups on
+                    # this table (handler.py reads and writes INTAKE_EVENTS_TABLE).
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{config.INTAKE_EVENTS_TABLE}",
                 ],
             },
             {
@@ -204,6 +207,7 @@ def ensure_function(lambda_client, role_arn: str, zip_bytes: bytes) -> str:
     env_vars = {
         "PRIOR_AUTH_TABLE": config.PRIOR_AUTH_TABLE,
         "PATIENTS_TABLE": config.PATIENTS_TABLE,
+        "INTAKE_EVENTS_TABLE": config.INTAKE_EVENTS_TABLE,
         "MEDIA_BUCKET": config.MEDIA_BUCKET,
         "WHATSAPP_PHONE_NUMBER_ID": config.WHATSAPP_PHONE_NUMBER_ID,
         "META_API_VERSION": config.META_API_VERSION,

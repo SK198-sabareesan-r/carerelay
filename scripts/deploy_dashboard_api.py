@@ -138,6 +138,12 @@ def ensure_role(iam_client) -> str:
                     f"arn:aws:dynamodb:{region}:{account_id}:table/{config.PRIOR_AUTH_TABLE}",
                     f"arn:aws:dynamodb:{region}:{account_id}:table/{config.PAYER_RULES_TABLE}",
                     f"arn:aws:dynamodb:{region}:{account_id}:table/{config.STAFF_USERS_TABLE}",
+                    # Patient directory (patient -> hospital link written by
+                    # POST /followups) plus the intake/appointment tables the
+                    # shared common/* helpers touch.
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{config.PATIENTS_TABLE}",
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{config.INTAKE_EVENTS_TABLE}",
+                    f"arn:aws:dynamodb:{region}:{account_id}:table/{config.APPOINTMENTS_TABLE}",
                 ],
             },
             {
@@ -185,6 +191,15 @@ def ensure_function(lambda_client, role_arn: str, zip_bytes: bytes) -> str:
         "PRIOR_AUTH_TABLE": config.PRIOR_AUTH_TABLE,
         "PAYER_RULES_TABLE": config.PAYER_RULES_TABLE,
         "STAFF_USERS_TABLE": config.STAFF_USERS_TABLE,
+        "PATIENTS_TABLE": config.PATIENTS_TABLE,
+        "INTAKE_EVENTS_TABLE": config.INTAKE_EVENTS_TABLE,
+        "APPOINTMENTS_TABLE": config.APPOINTMENTS_TABLE,
+        # Doctor approval card is sent to these numbers when a case moves to
+        # PENDING_DOCTOR_APPROVAL (config.clinic_approver_numbers reads env).
+        "CLINIC_APPROVER_NUMBERS": os.environ.get("CLINIC_APPROVER_NUMBERS", ""),
+        "CLINIC_NAME": os.environ.get("CLINIC_NAME", ""),
+        "PAYER_PRIOR_AUTH_INBOX": os.environ.get("PAYER_PRIOR_AUTH_INBOX", ""),
+        "META_API_VERSION": config.META_API_VERSION,
         "MEDIA_BUCKET": config.MEDIA_BUCKET,
         "SES_SENDER": config.SES_SENDER,
         "SES_SANDBOX_OVERRIDE_RECIPIENT": config.SES_SANDBOX_OVERRIDE_RECIPIENT,

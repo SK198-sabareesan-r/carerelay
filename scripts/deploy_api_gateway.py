@@ -146,7 +146,21 @@ def ensure_cors_options(apigw_client, api_id: str, resource_id: str, methods: li
     allow_methods = ",".join(methods + ["OPTIONS"])
     try:
         apigw_client.get_method(restApiId=api_id, resourceId=resource_id, httpMethod="OPTIONS")
-        print("  [cors] OPTIONS already configured, skipping.")
+        # Already exists: refresh the integration response so header changes
+        # (e.g. adding 'authorization') take effect on re-run instead of being
+        # silently skipped.
+        apigw_client.put_integration_response(
+            restApiId=api_id,
+            resourceId=resource_id,
+            httpMethod="OPTIONS",
+            statusCode="200",
+            responseParameters={
+                "method.response.header.Access-Control-Allow-Headers": "'content-type,authorization'",
+                "method.response.header.Access-Control-Allow-Methods": f"'{allow_methods}'",
+                "method.response.header.Access-Control-Allow-Origin": "'*'",
+            },
+        )
+        print(f"  [cors] OPTIONS preflight refreshed (allow: {allow_methods}).")
         return
     except apigw_client.exceptions.NotFoundException:
         pass
@@ -181,7 +195,7 @@ def ensure_cors_options(apigw_client, api_id: str, resource_id: str, methods: li
         httpMethod="OPTIONS",
         statusCode="200",
         responseParameters={
-            "method.response.header.Access-Control-Allow-Headers": "'content-type'",
+            "method.response.header.Access-Control-Allow-Headers": "'content-type,authorization'",
             "method.response.header.Access-Control-Allow-Methods": f"'{allow_methods}'",
             "method.response.header.Access-Control-Allow-Origin": "'*'",
         },
